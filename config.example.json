@@ -1,0 +1,19 @@
+{
+  "embedding": {
+    "type": "voyage",
+    "model": "voyage-4-lite",
+    "dimensions": 1024,
+    "baseUrl": "https://api.voyageai.com/v1",
+    "apiKeyEnv": "VOYAGE_API_KEY"
+  },
+  "reranker": {
+    "type": "none",
+    "model": "none"
+  },
+  "chunking": { "mode": "semantic" },
+  "alpha": 0.4,
+  "topK": 5,
+  "candidateTopK": 30,
+  "httpTimeoutMs": 30000,
+  "httpMaxRetries": 3
+}
