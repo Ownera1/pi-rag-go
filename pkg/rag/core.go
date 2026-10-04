@@ -24,10 +24,16 @@ type Chunk = model.Chunk
 type Hit = model.Hit
 type QueryOptions = model.QueryOptions
 type QueryResult = model.QueryResult
+type QueryUsage = model.QueryUsage
 type IndexResult = model.IndexResult
 type Status = model.Status
 type Config = model.Config
 type ProviderConfig = model.ProviderConfig
+type ChunkingConfig = model.ChunkingConfig
+type IndexingConfig = model.IndexingConfig
+type FileFailure = model.FileFailure
+type Progress = model.Progress
+type CleanupResult = model.CleanupResult
 type EmbeddingProvider = model.EmbeddingProvider
 type Reranker = model.Reranker
 
@@ -53,6 +59,11 @@ type Core struct {
 	writeMu             sync.Mutex
 	db                  *store.DB
 	lock                *os.File
+	closed              bool
+	stateMu             sync.RWMutex
+	trackedPaths        []string
+	failedFiles         []model.FileFailure
+	progress            model.Progress
 }
 
 func DefaultConfig() Config { return model.DefaultConfig() }
@@ -120,6 +131,8 @@ func Open(opts Options) (*Core, error) {
 		legacyProviderID: legacyProviderID,
 		embedder:         opts.Embedder,
 		reranker:         opts.Reranker,
+		trackedPaths:     append([]string{}, cfg.TrackedPaths...),
+		failedFiles:      []model.FileFailure{},
 	}
 	if opts.LegacyReadOnly {
 		c.cfg.Embedding, c.legacyContract, c.legacyProviderError = legacyProvider(
@@ -169,16 +182,19 @@ func Open(opts Options) (*Core, error) {
 		c.Close()
 		return nil, e
 	}
-	c.loadState()
+	if e = c.loadState(); e != nil {
+		c.Close()
+		return nil, e
+	}
 	if c.embedder == nil && cfg.Embedding.Type != "local" && (!c.legacy || c.legacyProviderError == nil) {
-		c.embedder, e = provider.NewHTTP(cfg.Embedding, cfg.HTTPTimeoutMs, cfg.HTTPMaxRetries)
+		c.embedder, e = provider.NewHTTP(cfg.Embedding, cfg.HTTPTimeoutMs, cfg.HTTPMaxRetries, cfg.Indexing.EmbeddingBatchSize)
 		if e != nil {
 			c.Close()
 			return nil, e
 		}
 	}
 	if c.reranker == nil && cfg.Reranker.Type != "none" {
-		c.reranker, e = provider.NewHTTP(cfg.Reranker, cfg.HTTPTimeoutMs, cfg.HTTPMaxRetries)
+		c.reranker, e = provider.NewHTTP(cfg.Reranker, cfg.HTTPTimeoutMs, cfg.HTTPMaxRetries, cfg.Indexing.EmbeddingBatchSize)
 		if e != nil {
 			c.Close()
 			return nil, e
@@ -188,9 +204,12 @@ func Open(opts Options) (*Core, error) {
 }
 
 func (c *Core) Close() error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var e error
+	c.closed = true
 	if c.db != nil {
 		e = c.db.Close()
 		c.db = nil
@@ -203,10 +222,33 @@ func (c *Core) Close() error {
 	return e
 }
 
-func (c *Core) Config() Config { return c.cfg }
+func (c *Core) Config() Config {
+	cfg := c.cfg
+	cfg.TrackedPaths = c.tracked()
+	cfg.ExcludePatterns = append([]string{}, cfg.ExcludePatterns...)
+	return cfg
+}
+
+func (c *Core) writable() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closed {
+		return errors.New("core is closed")
+	}
+	if c.legacy {
+		return errors.New("legacy store is read-only")
+	}
+	return nil
+}
 
 func (c *Core) ensureDB() error {
-	if c.db != nil {
+	c.mu.RLock()
+	closed, exists := c.closed, c.db != nil
+	c.mu.RUnlock()
+	if closed {
+		return errors.New("core is closed")
+	}
+	if exists {
 		return nil
 	}
 	if c.legacy {
@@ -230,9 +272,10 @@ func fingerprint(cfg Config) (string, string) {
 		BaseURL     string
 	}{cfg.Embedding.Type, cfg.Embedding.Model, cfg.Embedding.Dimensions, cfg.Embedding.BaseURL})
 	proc, _ := json.Marshal(struct {
-		Parser, Mode              string
-		Min, Target, Max, UnitMax int
-	}{"go-blocks-tei-v1", cfg.Chunking.Mode, 120, 280, 420, 140})
+		Parser   string
+		Search   string
+		Chunking model.ChunkingConfig
+	}{"go-blocks-tei-v2", "han-ngrams-v1", cfg.Chunking})
 	eh := sha256.Sum256(emb)
 	ph := sha256.Sum256(proc)
 	return hex.EncodeToString(eh[:]), hex.EncodeToString(ph[:])
@@ -272,7 +315,8 @@ func (c *Core) compatible(ctx context.Context, d *store.DB) error {
 func (c *Core) Status(ctx context.Context) (Status, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	s := Status{StoreDir: c.root, ReadOnly: c.legacy, TrackedPaths: append([]string{}, c.cfg.TrackedPaths...)}
+	paths, failures, progress := c.stateSnapshot()
+	s := Status{StoreDir: c.root, ReadOnly: c.legacy, TrackedPaths: paths, FailedFiles: failures, Progress: progress}
 	if c.db == nil {
 		return s, nil
 	}
@@ -282,6 +326,8 @@ func (c *Core) Status(ctx context.Context) (Status, error) {
 	}
 	x.StoreDir = c.root
 	x.TrackedPaths = s.TrackedPaths
+	x.FailedFiles = failures
+	x.Progress = progress
 	if err := c.compatible(ctx, c.db); err != nil {
 		x.NeedsRebuild = true
 		x.RebuildReason = err.Error()

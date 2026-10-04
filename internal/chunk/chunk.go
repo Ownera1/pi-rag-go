@@ -170,7 +170,11 @@ func splitOversized(s string, maxTokens int) []string {
 	return out
 }
 
-func Legacy(blocks []model.Block) []model.Chunk {
+func Legacy(blocks []model.Block, configs ...model.ChunkingConfig) []model.Chunk {
+	cfg := model.DefaultChunking()
+	if len(configs) > 0 {
+		cfg = configs[0]
+	}
 	chunks := []model.Chunk{}
 	buf, added := "", ""
 	start, end := 0, 0
@@ -182,7 +186,7 @@ func Legacy(blocks []model.Block) []model.Chunk {
 		if text == "" {
 			return
 		}
-		for _, part := range splitOversized(text, LegacyMax) {
+		for _, part := range splitOversized(text, cfg.LegacyMax) {
 			c := model.Chunk{Content: part, LineStart: start, LineEnd: end, PageStart: pageStart, PageEnd: pageEnd, Section: section, ChunkIndex: len(chunks)}
 			chunks = append(chunks, c)
 		}
@@ -194,9 +198,9 @@ func Legacy(blocks []model.Block) []model.Chunk {
 		if strings.TrimSpace(added) != "" {
 			push(buf)
 		}
-		if LegacyOverlap > 0 && strings.TrimSpace(added) != "" {
+		if cfg.LegacyOverlap > 0 && strings.TrimSpace(added) != "" {
 			r := []rune(buf)
-			keep := min(len(r), LegacyOverlap*2)
+			keep := min(len(r), cfg.LegacyOverlap*2)
 			buf = string(r[len(r)-keep:])
 			added = ""
 			if end > 0 {
@@ -213,9 +217,9 @@ func Legacy(blocks []model.Block) []model.Chunk {
 			}
 			return base + "\n\n" + p
 		}
-		if buf != "" && Estimate(joined(buf, piece)) > LegacyMax {
+		if buf != "" && Estimate(joined(buf, piece)) > cfg.LegacyMax {
 			flush()
-			for buf != "" && Estimate(joined(buf, piece)) > LegacyMax {
+			for buf != "" && Estimate(joined(buf, piece)) > cfg.LegacyMax {
 				r := []rune(buf)
 				if len(r) <= 1 {
 					reset()
@@ -240,10 +244,10 @@ func Legacy(blocks []model.Block) []model.Chunk {
 		if b.PageEnd != nil {
 			pageEnd = b.PageEnd
 		}
-		if Estimate(buf) > LegacyMax {
+		if Estimate(buf) > cfg.LegacyMax {
 			push(buf)
 			reset()
-		} else if Estimate(buf) >= LegacyTarget {
+		} else if Estimate(buf) >= cfg.LegacyTarget {
 			flush()
 		}
 	}
@@ -251,7 +255,8 @@ func Legacy(blocks []model.Block) []model.Chunk {
 		if strings.TrimSpace(b.Text) == "" {
 			continue
 		}
-		if buf != "" && b.PageStart != nil && pageEnd != nil && *b.PageStart > *pageEnd {
+		sectionChanged := (section == nil) != (b.Section == nil) || (section != nil && b.Section != nil && *section != *b.Section)
+		if buf != "" && (sectionChanged || (b.PageStart != nil && pageEnd != nil && *b.PageStart > *pageEnd)) {
 			flush()
 			reset()
 		}
@@ -271,7 +276,7 @@ func Legacy(blocks []model.Block) []model.Chunk {
 				ls = line(b, pos)
 				le = ls + strings.Count(piece, "\n")
 			}
-			for _, p := range splitOversized(piece, LegacyMax) {
+			for _, p := range splitOversized(piece, cfg.LegacyMax) {
 				appendPiece(p, b, ls, le)
 			}
 		}
@@ -282,16 +287,16 @@ func Legacy(blocks []model.Block) []model.Chunk {
 
 type unit struct{ start, end int }
 
-func splitUnits(r []rune) []unit {
+func splitUnits(r []rune, unitMax int) []unit {
 	all := []unit{}
 	add := func(from, to int) {
 		for from < to {
 			n := to
-			if Estimate(string(r[from:n])) > SemanticUnitMax {
+			if Estimate(string(r[from:n])) > unitMax {
 				lo, hi, best := from+1, to, from+1
 				for lo <= hi {
 					m := (lo + hi) / 2
-					if Estimate(string(r[from:m])) <= SemanticUnitMax {
+					if Estimate(string(r[from:m])) <= unitMax {
 						best = m
 						lo = m + 1
 					} else {
@@ -373,21 +378,31 @@ func semanticChunk(b model.Block, r []rune, from, to, index int) model.Chunk {
 	return newChunk(trimmed, b, index, ls, le)
 }
 
-func Semantic(ctx context.Context, blocks []model.Block, provider model.EmbeddingProvider) ([]model.Chunk, error) {
+func Semantic(ctx context.Context, blocks []model.Block, provider model.EmbeddingProvider, configs ...model.Config) ([]model.Chunk, error) {
+	cfg := model.DefaultConfig()
+	if len(configs) > 0 {
+		cfg = configs[0]
+	}
+	if provider == nil {
+		return nil, errors.New("embedding provider unavailable")
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	chunks := []model.Chunk{}
 	for _, b := range blocks {
 		if e := ctx.Err(); e != nil {
 			return nil, e
 		}
 		r := []rune(b.Text)
-		units := splitUnits(r)
+		units := splitUnits(r, cfg.Chunking.SemanticUnitMax)
 		if len(units) == 0 {
 			continue
 		}
 		vectors := make([][]float32, 0, len(units))
-		for i := 0; i < len(units); i += 64 {
+		for i := 0; i < len(units); i += cfg.Indexing.EmbeddingBatchSize {
 			texts := []string{}
-			for _, u := range units[i:min(i+64, len(units))] {
+			for _, u := range units[i:min(i+cfg.Indexing.EmbeddingBatchSize, len(units))] {
 				texts = append(texts, strings.TrimSpace(string(r[u.start:u.end])))
 			}
 			v, e := provider.EmbedDocuments(ctx, texts)
@@ -409,7 +424,7 @@ func Semantic(ctx context.Context, blocks []model.Block, provider model.Embeddin
 				return nil, e
 			}
 			remaining := string(r[units[cursor].start:units[len(units)-1].end])
-			if Estimate(remaining) <= SemanticTarget {
+			if Estimate(remaining) <= cfg.Chunking.SemanticTarget {
 				chunks = append(chunks, semanticChunk(b, r, units[cursor].start, units[len(units)-1].end, len(chunks)))
 				break
 			}
@@ -417,18 +432,18 @@ func Semantic(ctx context.Context, blocks []model.Block, provider model.Embeddin
 			bestScore, bestDistance := math.Inf(1), math.MaxInt
 			for end := cursor; end < len(units); end++ {
 				tokens := Estimate(string(r[units[cursor].start:units[end].end]))
-				if tokens > SemanticMax {
+				if tokens > cfg.Chunking.SemanticMax {
 					break
 				}
 				furthest = end
-				if tokens < SemanticMin || end == len(units)-1 {
+				if tokens < cfg.Chunking.SemanticMin || end == len(units)-1 {
 					continue
 				}
-				if Estimate(remaining) <= SemanticMax && Estimate(string(r[units[end+1].start:units[len(units)-1].end])) < SemanticMin {
+				if Estimate(remaining) <= cfg.Chunking.SemanticMax && Estimate(string(r[units[end+1].start:units[len(units)-1].end])) < cfg.Chunking.SemanticMin {
 					continue
 				}
 				score := cosine(vectors[end], vectors[end+1])
-				distance := tokens - SemanticTarget
+				distance := tokens - cfg.Chunking.SemanticTarget
 				if distance < 0 {
 					distance = -distance
 				}

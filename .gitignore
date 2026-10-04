@@ -17,3 +17,5 @@ __tests__/
 *.db-shm
 /stores/
 /bin/
+
+/evaluation/runs/

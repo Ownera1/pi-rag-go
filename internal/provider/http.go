@@ -18,19 +18,27 @@ import (
 )
 
 type HTTP struct {
-	cfg     model.ProviderConfig
-	client  *http.Client
-	retries int
+	cfg       model.ProviderConfig
+	client    *http.Client
+	retries   int
+	batchSize int
 }
 
-func NewHTTP(cfg model.ProviderConfig, timeoutMs, retries int) (*HTTP, error) {
+func NewHTTP(cfg model.ProviderConfig, timeoutMs, retries int, batchSizes ...int) (*HTTP, error) {
 	if cfg.Type != "voyage" && cfg.Type != "openai" && cfg.Type != "http" {
 		return nil, fmt.Errorf("unsupported protocol %q", cfg.Type)
 	}
 	if cfg.BaseURL == "" {
 		return nil, errors.New("provider baseUrl is required")
 	}
-	return &HTTP{cfg: cfg, client: &http.Client{Timeout: time.Duration(timeoutMs) * time.Millisecond}, retries: retries}, nil
+	batch := 64
+	if len(batchSizes) > 0 {
+		batch = batchSizes[0]
+	}
+	if batch < 1 || batch > 256 {
+		return nil, errors.New("embedding batch size must be in [1,256]")
+	}
+	return &HTTP{cfg: cfg, client: &http.Client{Timeout: time.Duration(timeoutMs) * time.Millisecond}, retries: retries, batchSize: batch}, nil
 }
 
 func (p *HTTP) Model() string { return p.cfg.Model }
@@ -128,8 +136,8 @@ func (p *HTTP) embed(ctx context.Context, texts []string, role string) ([][]floa
 		return [][]float32{}, nil
 	}
 	all := make([][]float32, 0, len(texts))
-	for start := 0; start < len(texts); start += 64 {
-		batch := texts[start:min(start+64, len(texts))]
+	for start := 0; start < len(texts); start += p.batchSize {
+		batch := texts[start:min(start+p.batchSize, len(texts))]
 		body := map[string]any{"model": p.cfg.Model, "input": batch}
 		if p.cfg.Type == "voyage" {
 			body["input_type"] = role

@@ -6,10 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/Ownera1/pi-rag-go/internal/chunk"
 	"github.com/Ownera1/pi-rag-go/internal/model"
+	"github.com/Ownera1/pi-rag-go/internal/searchtext"
 	"github.com/Ownera1/pi-rag-go/internal/store"
 )
 
@@ -65,8 +69,12 @@ func normalizeVector(rows []store.Match) map[int64]float64 {
 }
 
 func transient(err error) bool {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.Canceled) {
 		return false
+	}
+	var ne net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+		return true
 	}
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "model http 429") ||
@@ -77,18 +85,20 @@ func transient(err error) bool {
 		strings.Contains(s, "no such host")
 }
 
-func (c *Core) Query(ctx context.Context, query string, opts QueryOptions) (QueryResult, error) {
+func (c *Core) Query(ctx context.Context, query string, opts QueryOptions) (out QueryResult, err error) {
+	started := time.Now()
+	defer func() { out.ElapsedMs = float64(time.Since(started).Microseconds()) / 1000 }()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	out := QueryResult{Query: query, Hits: []model.Hit{}, Method: "hybrid"}
+	out = QueryResult{Query: query, Hits: []model.Hit{}, Method: "hybrid"}
+	if c.closed {
+		return out, errors.New("core is closed")
+	}
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
 	if strings.TrimSpace(query) == "" {
 		return out, errors.New("query is required")
-	}
-	if c.db == nil {
-		return out, nil
-	}
-	if err := c.compatible(ctx, c.db); err != nil {
-		return out, err
 	}
 	topK := opts.TopK
 	if topK == 0 {
@@ -105,17 +115,31 @@ func (c *Core) Query(ctx context.Context, query string, opts QueryOptions) (Quer
 	if opts.Alpha != nil {
 		alpha = *opts.Alpha
 	}
-	if alpha < 0 || alpha > 1 {
+	if math.IsNaN(alpha) || alpha < 0 || alpha > 1 {
 		return out, errors.New("alpha must be in [0,1]")
 	}
 	mode := opts.Mode
 	if mode == "" {
 		mode = "hybrid"
 	}
-	if mode != "hybrid" && mode != "bm25" {
-		return out, errors.New("mode must be hybrid or bm25")
+	if mode != "hybrid" && mode != "bm25" && mode != "vector" {
+		return out, errors.New("mode must be hybrid, vector or bm25")
 	}
-	if c.legacy && mode == "hybrid" {
+	reranker := c.reranker
+	if opts.DisableRerank {
+		reranker = nil
+	}
+	if opts.RequireRerank && reranker == nil {
+		return out, errors.New("reranker required but unavailable")
+	}
+	out.Method = mode
+	if c.db == nil {
+		return out, nil
+	}
+	if err := c.compatible(ctx, c.db); err != nil {
+		return out, err
+	}
+	if c.legacy && mode != "bm25" {
 		raw := c.db.GetMetadata(ctx, "embedding_fingerprint")
 		var fp struct {
 			Provider         string `json:"provider"`
@@ -142,22 +166,36 @@ func (c *Core) Query(ctx context.Context, query string, opts QueryOptions) (Quer
 		}
 	}
 	recall := topK
-	if c.reranker != nil {
+	if reranker != nil {
 		recall = candidate
 	}
-	ftsLimit := min(200, max(recall*20, 200))
-	fts, e := c.db.FTS(ctx, quotedQuery(query), ftsLimit)
-	if e != nil {
-		return out, e
+	fts := []store.Match{}
+	if mode != "vector" {
+		fts, err = c.db.FTS(ctx, quotedQuery(query), 200)
+		if err != nil {
+			return out, err
+		}
+		if hanQuery, hasHan := searchtext.Query(query); hasHan && !c.legacy {
+			fts, err = c.db.FTSHan(ctx, hanQuery, 200)
+			if err != nil {
+				return out, err
+			}
+		}
 	}
+	var e error
 	vec := []store.Match{}
-	if mode == "hybrid" {
+	if mode != "bm25" {
 		if c.embedder == nil {
 			return out, errors.New("embedding provider unavailable")
 		}
+		out.Usage.EmbeddingCalls++
+		out.Usage.EstimatedEmbeddingTokens += chunk.Estimate(query)
 		vector, err := c.embedder.EmbedQuery(ctx, query)
 		if err != nil {
-			if !transient(err) {
+			if ctx.Err() != nil {
+				return out, ctx.Err()
+			}
+			if mode == "vector" || !transient(err) {
 				return out, err
 			}
 			out.Degraded = "query embedding failed, BM25 only: " + err.Error()
@@ -217,6 +255,9 @@ func (c *Core) Query(ctx context.Context, query string, opts QueryOptions) (Quer
 		if len(vec) > 0 {
 			score = alpha*b + (1-alpha)*v
 		}
+		if mode == "vector" {
+			score = v
+		}
 		if score > 0 {
 			hits = append(hits, model.Hit{Chunk: ch, BM25: b, Vector: v, Hybrid: score})
 		}
@@ -225,12 +266,17 @@ func (c *Core) Query(ctx context.Context, query string, opts QueryOptions) (Quer
 	if len(hits) > recall {
 		hits = hits[:recall]
 	}
-	if c.reranker != nil && len(hits) > 0 {
+	if reranker != nil && len(hits) > 0 {
 		docs := make([]model.RerankDoc, len(hits))
 		for i, h := range hits {
 			docs[i] = model.RerankDoc{ID: h.Chunk.ID, Text: h.Chunk.Content}
 		}
-		ranked, err := c.reranker.Rerank(ctx, query, docs, topK)
+		out.Usage.RerankCalls++
+		out.Usage.EstimatedRerankTokens += chunk.Estimate(query)
+		for _, doc := range docs {
+			out.Usage.EstimatedRerankTokens += chunk.Estimate(doc.Text)
+		}
+		ranked, err := reranker.Rerank(ctx, query, docs, topK)
 		if err != nil {
 			if e := ctx.Err(); e != nil {
 				return out, e

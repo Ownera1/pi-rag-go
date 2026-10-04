@@ -20,6 +20,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/Ownera1/pi-rag-go/internal/model"
+	"github.com/Ownera1/pi-rag-go/internal/searchtext"
 )
 
 var loadOnce sync.Once
@@ -103,6 +104,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
     INSERT INTO chunks_fts(rowid, chunk_content, file_path)
     VALUES(new.rowid, new.chunk_content, new.file_path);
+END;
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_cjk USING fts5(search_text);
+CREATE TRIGGER IF NOT EXISTS chunks_cjk_ad AFTER DELETE ON chunks BEGIN
+    DELETE FROM chunks_cjk WHERE rowid=old.rowid;
 END;
 CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
     DELETE FROM chunks_fts WHERE rowid=old.rowid;
@@ -236,6 +241,9 @@ INSERT INTO chunks (
 		if err != nil {
 			return err
 		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO chunks_cjk(rowid,search_text) VALUES(?,?)", rowid, searchtext.Indexed(c.Content+" "+doc.Path)); err != nil {
+			return err
+		}
 		if _, err = tx.ExecContext(ctx, "INSERT INTO chunks_vec(rowid,embedding) VALUES(CAST(? AS INTEGER),?)", rowid, vecBytes(vectors[i])); err != nil {
 			return err
 		}
@@ -312,6 +320,23 @@ func (d *DB) FTS(ctx context.Context, query string, limit int) ([]Match, error) 
 		var m Match
 		if e = rows.Scan(&m.RowID, &m.Score); e != nil {
 			return nil, e
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) FTSHan(ctx context.Context, query string, limit int) ([]Match, error) {
+	rows, err := d.SQL.QueryContext(ctx, "SELECT rowid,bm25(chunks_cjk) FROM chunks_cjk WHERE chunks_cjk MATCH ? ORDER BY bm25(chunks_cjk) LIMIT ?", query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Match{}
+	for rows.Next() {
+		var m Match
+		if err = rows.Scan(&m.RowID, &m.Score); err != nil {
+			return nil, err
 		}
 		out = append(out, m)
 	}

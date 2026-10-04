@@ -21,13 +21,16 @@ func main() {
 
 func run() error {
 	endpoint := flag.String("endpoint", "http://127.0.0.1:7331/mcp", "ragd MCP URL")
-	mode := flag.String("mode", "hybrid", "query mode: hybrid or bm25")
+	mode := flag.String("mode", "hybrid", "query mode: hybrid, vector or bm25")
+	noRerank := flag.Bool("no-rerank", false, "disable reranking for this query")
+	keep := flag.Int("keep", 3, "generations to retain during cleanup, including active")
+	dryRun := flag.Bool("dry-run", false, "preview cleanup even when confirmed")
 	top := flag.Int("top-k", 0, "query result limit")
-	confirm := flag.Bool("confirm", false, "confirm clear operation")
+	confirm := flag.Bool("confirm", false, "confirm clear or cleanup operation")
 	flag.Parse()
 	args := flag.Args()
 	if len(args) == 0 {
-		return errors.New("usage: ragctl [flags] query|index|status|refresh|list|rebuild|clear [args]")
+		return errors.New("usage: ragctl [flags] query|index|status|refresh|list|rebuild|clear|cleanup [args]")
 	}
 	name := ""
 	input := map[string]any{}
@@ -39,6 +42,7 @@ func run() error {
 		}
 		input["query"] = strings.Join(args[1:], " ")
 		input["mode"] = *mode
+		input["disable_rerank"] = *noRerank
 		if *top > 0 {
 			input["top_k"] = *top
 		}
@@ -59,6 +63,9 @@ func run() error {
 	case "clear":
 		name = "rag_clear"
 		input["confirm"] = *confirm
+	case "cleanup":
+		name = "rag_cleanup"
+		input["keep"], input["dry_run"], input["confirm"] = *keep, *dryRun, *confirm
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -87,6 +94,17 @@ func run() error {
 			return e
 		}
 		fmt.Println(string(b))
+		if name == "rag_index" || name == "rag_refresh" || name == "rag_rebuild" {
+			var outcome struct {
+				Failed int `json:"failed"`
+			}
+			if e := json.Unmarshal(b, &outcome); e != nil {
+				return e
+			}
+			if outcome.Failed > 0 {
+				return fmt.Errorf("%d files failed; inspect failures in JSON output and rag_status", outcome.Failed)
+			}
+		}
 		return nil
 	}
 	for _, content := range result.Content {

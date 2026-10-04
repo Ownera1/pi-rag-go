@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/Ownera1/pi-rag-go/internal/model"
@@ -42,5 +44,44 @@ func TestVoyageRolesAndOutOfOrderEmbeddings(t *testing.T) {
 	}
 	if len(roles) != 2 || roles[0] != "query" || roles[1] != "document" {
 		t.Fatal(roles)
+	}
+}
+
+func TestConfiguredEmbeddingBatchSize(t *testing.T) {
+	var mu sync.Mutex
+	sizes := []int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Error(err)
+			return
+		}
+		mu.Lock()
+		sizes = append(sizes, len(input.Input))
+		mu.Unlock()
+		data := []map[string]any{}
+		for i := range input.Input {
+			data = append(data, map[string]any{"index": i, "embedding": []float32{1, 0}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer server.Close()
+	cfg := model.ProviderConfig{Type: "openai", Model: "fake", Dimensions: 2, BaseURL: server.URL}
+	p, err := NewHTTP(cfg, 3000, 0, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vectors, err := p.EmbedDocuments(context.Background(), []string{"1", "2", "3", "4", "5", "6", "7", "8"})
+	mu.Lock()
+	defer mu.Unlock()
+	if err != nil || len(vectors) != 8 || !reflect.DeepEqual(sizes, []int{3, 3, 2}) {
+		t.Fatalf("batching: %v %v", sizes, err)
+	}
+	for _, size := range []int{0, 257} {
+		if _, err = NewHTTP(cfg, 3000, 0, size); err == nil {
+			t.Fatalf("accepted batch %d", size)
+		}
 	}
 }

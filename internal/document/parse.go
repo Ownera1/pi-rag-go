@@ -161,11 +161,11 @@ func ParseTEI(ctx context.Context, b []byte) ([]model.Block, error) {
 				}
 			}
 			stack = append(stack, t.Name)
-			if t.Name.Space != teiNS {
-				continue
-			}
 			if skipDepth > 0 {
 				skipDepth++
+				continue
+			}
+			if t.Name.Space != teiNS {
 				continue
 			}
 			switch t.Name.Local {

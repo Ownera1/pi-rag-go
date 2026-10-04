@@ -59,8 +59,8 @@ func run() error {
 	}
 	defer core.Close()
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcpserver.Handler(mcpserver.New(core)))
-	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	mux.Handle("/mcp", mcpserver.Handler(mcpserver.New(core, ctx)))
+	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
 	go func() {
 		<-ctx.Done()
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
