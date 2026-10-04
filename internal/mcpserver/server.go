@@ -9,8 +9,9 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/Ownera1/pi-rag-go/pkg/rag"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Ownera1/pi-rag-go/pkg/rag"
 )
 
 func New(core *rag.Core) *mcp.Server {
@@ -22,44 +23,80 @@ func New(core *rag.Core) *mcp.Server {
 		Alpha         *float64 `json:"alpha,omitempty"`
 		Mode          string   `json:"mode,omitempty"`
 	}
-	mcp.AddTool(s, &mcp.Tool{Name: "rag_query", Description: "Search the shared knowledge store and return structured source hits"}, func(ctx context.Context, _ *mcp.CallToolRequest, in queryIn) (*mcp.CallToolResult, rag.QueryResult, error) {
-		r, e := core.Query(ctx, in.Query, rag.QueryOptions{TopK: in.TopK, CandidateTopK: in.CandidateTopK, Alpha: in.Alpha, Mode: in.Mode})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "rag_query",
+		Description: "Search the shared knowledge store and return structured source hits",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in queryIn) (*mcp.CallToolResult, rag.QueryResult, error) {
+		r, e := core.Query(ctx, in.Query, rag.QueryOptions{
+			TopK:          in.TopK,
+			CandidateTopK: in.CandidateTopK,
+			Alpha:         in.Alpha,
+			Mode:          in.Mode,
+		})
 		return nil, r, e
 	})
+
 	type indexIn struct {
 		Paths []string `json:"paths"`
 	}
-	mcp.AddTool(s, &mcp.Tool{Name: "rag_index", Description: "Index files or directories and track them for refresh"}, func(ctx context.Context, _ *mcp.CallToolRequest, in indexIn) (*mcp.CallToolResult, rag.IndexResult, error) {
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "rag_index",
+		Description: "Index files or directories and track them for refresh",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in indexIn) (*mcp.CallToolResult, rag.IndexResult, error) {
 		r, e := core.Index(ctx, in.Paths)
 		return nil, r, e
 	})
+
 	type empty struct{}
-	mcp.AddTool(s, &mcp.Tool{Name: "rag_status", Description: "Show store and index status without triggering model calls"}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.Status, error) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "rag_status",
+		Description: "Show store and index status without triggering model calls",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.Status, error) {
 		r, e := core.Status(ctx)
 		return nil, r, e
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "rag_refresh", Description: "Rescan tracked paths and update changed documents"}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.IndexResult, error) {
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "rag_refresh",
+		Description: "Rescan tracked paths and update changed documents",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.IndexResult, error) {
 		r, e := core.Refresh(ctx)
 		return nil, r, e
 	})
+
 	type listOut struct {
 		Documents []string `json:"documents"`
 	}
-	mcp.AddTool(s, &mcp.Tool{Name: "rag_list_documents", Description: "List indexed source paths"}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, listOut, error) {
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "rag_list_documents",
+		Description: "List indexed source paths",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, listOut, error) {
 		r, e := core.ListDocuments(ctx)
 		return nil, listOut{r}, e
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "rag_rebuild", Description: "Build a new generation from tracked paths and atomically publish it"}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.IndexResult, error) {
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "rag_rebuild",
+		Description: "Build a new generation from tracked paths and atomically publish it",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.IndexResult, error) {
 		r, e := core.Rebuild(ctx)
 		return nil, r, e
 	})
+
 	type clearIn struct {
 		Confirm bool `json:"confirm"`
 	}
 	type clearOut struct {
 		Cleared bool `json:"cleared"`
 	}
-	mcp.AddTool(s, &mcp.Tool{Name: "rag_clear", Description: "Publish an empty index while retaining tracked paths and old generations; requires confirm=true"}, func(ctx context.Context, _ *mcp.CallToolRequest, in clearIn) (*mcp.CallToolResult, clearOut, error) {
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "rag_clear",
+		Description: "Publish an empty index while retaining tracked paths and old generations; requires confirm=true",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in clearIn) (*mcp.CallToolResult, clearOut, error) {
 		if !in.Confirm {
 			return nil, clearOut{}, errors.New("confirm=true is required")
 		}
@@ -68,6 +105,7 @@ func New(core *rag.Core) *mcp.Server {
 	})
 	return s
 }
+
 func Handler(s *mcp.Server) http.Handler {
 	base := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, nil)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +131,7 @@ func Handler(s *mcp.Server) http.Handler {
 		base.ServeHTTP(w, r)
 	})
 }
+
 func Proxy(ctx context.Context, endpoint string) error {
 	return proxy(ctx, endpoint, &mcp.StdioTransport{})
 }
@@ -120,6 +159,7 @@ func proxy(ctx context.Context, endpoint string, transport mcp.Transport) error 
 	}
 	return server.Run(ctx, transport)
 }
+
 func Endpoint(addr string) string {
 	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
 		return strings.TrimRight(addr, "/")

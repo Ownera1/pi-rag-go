@@ -11,8 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Ownera1/pi-rag-go/pkg/rag"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Ownera1/pi-rag-go/pkg/rag"
 )
 
 func TestHTTPClientCanCallStatus(t *testing.T) {
@@ -60,7 +61,9 @@ func TestHTTPIndexAndQueryWithModelService(t *testing.T) {
 	root := t.TempDir()
 	sources := t.TempDir()
 	path := filepath.Join(sources, "source.tei.xml")
-	if e := os.WriteFile(path, []byte(`<TEI xmlns="http://www.tei-c.org/ns/1.0"><text><body><div><head>Method</head><p>channel evidence for shared agents</p></div></body></text></TEI>`), 0600); e != nil {
+	xml := `<TEI xmlns="http://www.tei-c.org/ns/1.0"><text><body><div><head>Method</head>` +
+		`<p>channel evidence for shared agents</p></div></body></text></TEI>`
+	if e := os.WriteFile(path, []byte(xml), 0600); e != nil {
 		t.Fatal(e)
 	}
 	cfg := rag.DefaultConfig()

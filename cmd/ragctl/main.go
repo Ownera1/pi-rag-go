@@ -6,9 +6,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"os"
 	"strings"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func main() {
@@ -17,6 +18,7 @@ func main() {
 		os.Exit(1)
 	}
 }
+
 func run() error {
 	endpoint := flag.String("endpoint", "http://127.0.0.1:7331/mcp", "ragd MCP URL")
 	mode := flag.String("mode", "hybrid", "query mode: hybrid or bm25")

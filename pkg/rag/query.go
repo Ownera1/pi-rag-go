@@ -21,6 +21,7 @@ func quotedQuery(query string) string {
 	}
 	return strings.Join(out, " ")
 }
+
 func normalizeBM25(rows []store.Match) map[int64]float64 {
 	out := map[int64]float64{}
 	if len(rows) == 0 {
@@ -40,6 +41,7 @@ func normalizeBM25(rows []store.Match) map[int64]float64 {
 	}
 	return out
 }
+
 func normalizeVector(rows []store.Match) map[int64]float64 {
 	out := map[int64]float64{}
 	if len(rows) == 0 {
@@ -61,13 +63,20 @@ func normalizeVector(rows []store.Match) map[int64]float64 {
 	}
 	return out
 }
+
 func transient(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "model http 429") || strings.Contains(s, "model http 5") || strings.Contains(s, "timeout") || strings.Contains(s, "connection") || strings.Contains(s, "network") || strings.Contains(s, "no such host")
+	return strings.Contains(s, "model http 429") ||
+		strings.Contains(s, "model http 5") ||
+		strings.Contains(s, "timeout") ||
+		strings.Contains(s, "connection") ||
+		strings.Contains(s, "network") ||
+		strings.Contains(s, "no such host")
 }
+
 func (c *Core) Query(ctx context.Context, query string, opts QueryOptions) (QueryResult, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -124,7 +133,11 @@ func (c *Core) Query(ctx context.Context, query string, opts QueryOptions) (Quer
 		if c.legacyProviderError != nil {
 			return out, fmt.Errorf("legacy vector provider unavailable: %w; use bm25", c.legacyProviderError)
 		}
-		if fp.Provider != c.legacyProviderID || fp.Model != c.cfg.Embedding.Model || fp.Dimensions != c.cfg.Embedding.Dimensions || fp.Contract != "l2-unit-v1" || (fp.ProviderContract != "" && fp.ProviderContract != c.legacyContract) {
+		if fp.Provider != c.legacyProviderID ||
+			fp.Model != c.cfg.Embedding.Model ||
+			fp.Dimensions != c.cfg.Embedding.Dimensions ||
+			fp.Contract != "l2-unit-v1" ||
+			(fp.ProviderContract != "" && fp.ProviderContract != c.legacyContract) {
 			return out, errors.New("legacy embedding contract does not match configured provider")
 		}
 	}

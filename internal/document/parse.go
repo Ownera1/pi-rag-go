@@ -23,6 +23,7 @@ var whitespace = regexp.MustCompile(`\s+`)
 var heading = regexp.MustCompile(`^(#{1,6}) (.*)$`)
 
 func ShortHash(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:])[:12] }
+
 func Parse(ctx context.Context, path string) (model.Document, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -45,6 +46,7 @@ func Parse(ctx context.Context, path string) (model.Document, error) {
 	}
 	return d, nil
 }
+
 func markdown(text string) []model.Block {
 	lines := strings.Split(text, "\n")
 	type start struct {
@@ -79,7 +81,9 @@ func markdown(text string) []model.Block {
 	}
 	return blocks
 }
+
 func normalize(s string) string { return strings.TrimSpace(whitespace.ReplaceAllString(s, " ")) }
+
 func section(path []string) *string {
 	p := []string{}
 	for _, v := range path {

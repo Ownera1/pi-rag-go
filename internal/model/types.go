@@ -10,6 +10,7 @@ type Block struct {
 	LineStart *int    `json:"lineStart"`
 	LineEnd   *int    `json:"lineEnd"`
 }
+
 type Document struct {
 	Path   string  `json:"path"`
 	Hash   string  `json:"hash"`
@@ -17,6 +18,7 @@ type Document struct {
 	Format string  `json:"format"`
 	Blocks []Block `json:"blocks"`
 }
+
 type Chunk struct {
 	ID         string  `json:"id"`
 	Path       string  `json:"path"`
@@ -30,6 +32,7 @@ type Chunk struct {
 	Section    *string `json:"section"`
 	ChunkIndex int     `json:"chunkIndex"`
 }
+
 type Hit struct {
 	Chunk  Chunk    `json:"chunk"`
 	BM25   float64  `json:"bm25"`
@@ -37,18 +40,21 @@ type Hit struct {
 	Hybrid float64  `json:"hybrid"`
 	Rerank *float64 `json:"rerank,omitempty"`
 }
+
 type QueryOptions struct {
 	TopK          int      `json:"top_k"`
 	CandidateTopK int      `json:"candidate_top_k"`
 	Alpha         *float64 `json:"alpha,omitempty"`
 	Mode          string   `json:"mode,omitempty"`
 }
+
 type QueryResult struct {
 	Query    string `json:"query"`
 	Hits     []Hit  `json:"hits"`
 	Method   string `json:"method"`
 	Degraded string `json:"degraded,omitempty"`
 }
+
 type IndexResult struct {
 	Indexed int      `json:"indexed"`
 	Skipped int      `json:"skipped"`
@@ -56,6 +62,7 @@ type IndexResult struct {
 	Chunks  int      `json:"chunks"`
 	Errors  []string `json:"errors"`
 }
+
 type Status struct {
 	StoreDir       string   `json:"storeDir"`
 	ReadOnly       bool     `json:"readOnly"`
@@ -69,6 +76,7 @@ type Status struct {
 	ActiveDB       string   `json:"activeDb"`
 	TrackedPaths   []string `json:"trackedPaths"`
 }
+
 type ProviderConfig struct {
 	Type       string `json:"type"`
 	Model      string `json:"model"`
@@ -76,9 +84,11 @@ type ProviderConfig struct {
 	BaseURL    string `json:"baseUrl,omitempty"`
 	APIKeyEnv  string `json:"apiKeyEnv,omitempty"`
 }
+
 type ChunkingConfig struct {
 	Mode string `json:"mode"`
 }
+
 type Config struct {
 	Embedding       ProviderConfig `json:"embedding"`
 	Reranker        ProviderConfig `json:"reranker"`
@@ -91,20 +101,24 @@ type Config struct {
 	HTTPTimeoutMs   int            `json:"httpTimeoutMs"`
 	HTTPMaxRetries  int            `json:"httpMaxRetries"`
 }
+
 type EmbeddingProvider interface {
 	Model() string
 	Dimensions() int
 	EmbedQuery(context.Context, string) ([]float32, error)
 	EmbedDocuments(context.Context, []string) ([][]float32, error)
 }
+
 type RerankDoc struct {
 	ID   string
 	Text string
 }
+
 type RerankResult struct {
 	ID    string
 	Score float64
 }
+
 type Reranker interface {
 	Model() string
 	Rerank(context.Context, string, []RerankDoc, int) ([]RerankResult, error)

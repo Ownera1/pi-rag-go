@@ -38,6 +38,7 @@ type Options struct {
 	Embedder       EmbeddingProvider
 	Reranker       Reranker
 }
+
 type Core struct {
 	root                string
 	configPath          string
@@ -55,6 +56,7 @@ type Core struct {
 }
 
 func DefaultConfig() Config { return model.DefaultConfig() }
+
 func Open(opts Options) (*Core, error) {
 	if opts.StoreDir == "" {
 		return nil, errors.New("StoreDir is required")
@@ -110,9 +112,19 @@ func Open(opts Options) (*Core, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	c := &Core{root: root, configPath: path, cfg: cfg, legacy: opts.LegacyReadOnly, legacyProviderID: legacyProviderID, embedder: opts.Embedder, reranker: opts.Reranker}
+	c := &Core{
+		root:             root,
+		configPath:       path,
+		cfg:              cfg,
+		legacy:           opts.LegacyReadOnly,
+		legacyProviderID: legacyProviderID,
+		embedder:         opts.Embedder,
+		reranker:         opts.Reranker,
+	}
 	if opts.LegacyReadOnly {
-		c.cfg.Embedding, c.legacyContract, c.legacyProviderError = legacyProvider(root, legacyProviderID, cfg.Embedding.Model, cfg.Embedding.Dimensions)
+		c.cfg.Embedding, c.legacyContract, c.legacyProviderError = legacyProvider(
+			root, legacyProviderID, cfg.Embedding.Model, cfg.Embedding.Dimensions,
+		)
 		cfg = c.cfg
 	}
 	if !opts.LegacyReadOnly {
@@ -174,6 +186,7 @@ func Open(opts Options) (*Core, error) {
 	}
 	return c, nil
 }
+
 func (c *Core) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -189,7 +202,9 @@ func (c *Core) Close() error {
 	}
 	return e
 }
+
 func (c *Core) Config() Config { return c.cfg }
+
 func (c *Core) ensureDB() error {
 	if c.db != nil {
 		return nil
@@ -207,6 +222,7 @@ func (c *Core) ensureDB() error {
 	c.mu.Unlock()
 	return c.stamp(context.Background(), db)
 }
+
 func fingerprint(cfg Config) (string, string) {
 	emb, _ := json.Marshal(struct {
 		Type, Model string
@@ -221,6 +237,7 @@ func fingerprint(cfg Config) (string, string) {
 	ph := sha256.Sum256(proc)
 	return hex.EncodeToString(eh[:]), hex.EncodeToString(ph[:])
 }
+
 func (c *Core) stamp(ctx context.Context, d *store.DB) error {
 	emb, proc := fingerprint(c.cfg)
 	if e := d.SetMetadata(ctx, "embedding_fingerprint", emb); e != nil {
@@ -237,6 +254,7 @@ func (c *Core) stamp(ctx context.Context, d *store.DB) error {
 	}
 	return d.SetMetadata(ctx, "go_storage_version", "1")
 }
+
 func (c *Core) compatible(ctx context.Context, d *store.DB) error {
 	if c.legacy {
 		return nil
@@ -250,6 +268,7 @@ func (c *Core) compatible(ctx context.Context, d *store.DB) error {
 	}
 	return nil
 }
+
 func (c *Core) Status(ctx context.Context) (Status, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -272,6 +291,7 @@ func (c *Core) Status(ctx context.Context) (Status, error) {
 	}
 	return x, nil
 }
+
 func (c *Core) ListDocuments(ctx context.Context) ([]string, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

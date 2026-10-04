@@ -9,11 +9,25 @@ import (
 
 func DefaultConfig() Config {
 	return Config{
-		Embedding: ProviderConfig{Type: "voyage", Model: "voyage-4-lite", Dimensions: 1024, BaseURL: "https://api.voyageai.com/v1", APIKeyEnv: "VOYAGE_API_KEY"},
-		Reranker:  ProviderConfig{Type: "none", Model: "none"}, Chunking: ChunkingConfig{Mode: "semantic"},
-		TrackedPaths: []string{}, ExcludePatterns: []string{}, Alpha: 0.4, CandidateTopK: 30, TopK: 5, HTTPTimeoutMs: 30000, HTTPMaxRetries: 3,
+		Embedding: ProviderConfig{
+			Type:       "voyage",
+			Model:      "voyage-4-lite",
+			Dimensions: 1024,
+			BaseURL:    "https://api.voyageai.com/v1",
+			APIKeyEnv:  "VOYAGE_API_KEY",
+		},
+		Reranker:        ProviderConfig{Type: "none", Model: "none"},
+		Chunking:        ChunkingConfig{Mode: "semantic"},
+		TrackedPaths:    []string{},
+		ExcludePatterns: []string{},
+		Alpha:           0.4,
+		CandidateTopK:   30,
+		TopK:            5,
+		HTTPTimeoutMs:   30000,
+		HTTPMaxRetries:  3,
 	}
 }
+
 func LoadConfig(path string) (Config, error) {
 	c := DefaultConfig()
 	if path == "" {
@@ -47,6 +61,7 @@ func LoadConfig(path string) (Config, error) {
 	}
 	return c, c.Validate()
 }
+
 func (c Config) Validate() error {
 	if c.Embedding.Type != "voyage" && c.Embedding.Type != "openai" {
 		return fmt.Errorf("unsupported embedding type %q", c.Embedding.Type)

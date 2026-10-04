@@ -32,15 +32,26 @@ func Estimate(s string) int {
 	}
 	return max(1, cjk+(other+3)/4)
 }
+
 func newChunk(text string, b model.Block, index, start, end int) model.Chunk {
-	return model.Chunk{Content: text, LineStart: start, LineEnd: end, PageStart: b.PageStart, PageEnd: b.PageEnd, Section: b.Section, ChunkIndex: index}
+	return model.Chunk{
+		Content:    text,
+		LineStart:  start,
+		LineEnd:    end,
+		PageStart:  b.PageStart,
+		PageEnd:    b.PageEnd,
+		Section:    b.Section,
+		ChunkIndex: index,
+	}
 }
+
 func line(b model.Block, offset int) int {
 	if b.LineStart == nil {
 		return 0
 	}
 	return *b.LineStart + strings.Count(b.Text[:offset], "\n")
 }
+
 func spans(text string) []string {
 	parts := []string{}
 	var start int
@@ -62,6 +73,7 @@ func spans(text string) []string {
 	parts = append(parts, text[start:])
 	return parts
 }
+
 func hardSplit(text string, maxTokens int) []string {
 	r := []rune(text)
 	out := []string{}
@@ -81,6 +93,7 @@ func hardSplit(text string, maxTokens int) []string {
 	}
 	return out
 }
+
 func splitOversized(s string, maxTokens int) []string {
 	if Estimate(s) <= maxTokens {
 		return []string{s}
@@ -156,6 +169,7 @@ func splitOversized(s string, maxTokens int) []string {
 	}
 	return out
 }
+
 func Legacy(blocks []model.Block) []model.Chunk {
 	chunks := []model.Chunk{}
 	buf, added := "", ""
@@ -331,6 +345,7 @@ func splitUnits(r []rune) []unit {
 	}
 	return all
 }
+
 func cosine(a, b []float32) float64 {
 	var dot, aa, bb float64
 	for i := range a {
@@ -343,6 +358,7 @@ func cosine(a, b []float32) float64 {
 	}
 	return dot / math.Sqrt(aa*bb)
 }
+
 func semanticChunk(b model.Block, r []rune, from, to, index int) model.Chunk {
 	raw := string(r[from:to])
 	left := len([]rune(raw)) - len([]rune(strings.TrimLeftFunc(raw, unicode.IsSpace)))
@@ -356,6 +372,7 @@ func semanticChunk(b model.Block, r []rune, from, to, index int) model.Chunk {
 	}
 	return newChunk(trimmed, b, index, ls, le)
 }
+
 func Semantic(ctx context.Context, blocks []model.Block, provider model.EmbeddingProvider) ([]model.Chunk, error) {
 	chunks := []model.Chunk{}
 	for _, b := range blocks {

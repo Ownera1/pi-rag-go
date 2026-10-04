@@ -13,11 +13,14 @@ import (
 
 type fakeEmbedding struct{ fail bool }
 
-func (fakeEmbedding) Model() string   { return "fake" }
+func (fakeEmbedding) Model() string { return "fake" }
+
 func (fakeEmbedding) Dimensions() int { return 2 }
+
 func (f fakeEmbedding) EmbedQuery(ctx context.Context, s string) ([]float32, error) {
 	return []float32{1, 0}, nil
 }
+
 func (f fakeEmbedding) EmbedDocuments(ctx context.Context, in []string) ([][]float32, error) {
 	if f.fail {
 		return nil, os.ErrDeadlineExceeded
@@ -28,6 +31,7 @@ func (f fakeEmbedding) EmbedDocuments(ctx context.Context, in []string) ([][]flo
 	}
 	return out, nil
 }
+
 func openTest(t *testing.T, storeDir string, provider EmbeddingProvider) *Core {
 	t.Helper()
 	cfg := DefaultConfig()
@@ -46,6 +50,7 @@ func openTest(t *testing.T, storeDir string, provider EmbeddingProvider) *Core {
 	}
 	return c
 }
+
 func TestIndexQueryRebuildFailureAndRestart(t *testing.T) {
 	ctx := context.Background()
 	base := t.TempDir()
@@ -54,7 +59,8 @@ func TestIndexQueryRebuildFailureAndRestart(t *testing.T) {
 		t.Fatal(e)
 	}
 	file := filepath.Join(source, "paper.tei.xml")
-	valid := `<TEI xmlns="http://www.tei-c.org/ns/1.0"><text><body><div><head>Channel Method</head><p>original evidence searchable.</p></div></body></text></TEI>`
+	valid := `<TEI xmlns="http://www.tei-c.org/ns/1.0"><text><body><div><head>Channel Method</head>` +
+		`<p>original evidence searchable.</p></div></body></text></TEI>`
 	if e := os.WriteFile(file, []byte(valid), 0600); e != nil {
 		t.Fatal(e)
 	}
