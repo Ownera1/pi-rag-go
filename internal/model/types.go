@@ -12,25 +12,33 @@ type Block struct {
 }
 
 type Document struct {
-	Path   string  `json:"path"`
-	Hash   string  `json:"hash"`
-	Size   int64   `json:"size"`
-	Format string  `json:"format"`
-	Blocks []Block `json:"blocks"`
+	ID            string  `json:"id"`
+	SourcePath    string  `json:"sourcePath,omitempty"`
+	Title         string  `json:"title,omitempty"`
+	ParserVersion string  `json:"parserVersion"`
+	Path          string  `json:"path"`
+	Hash          string  `json:"hash"`
+	Size          int64   `json:"size"`
+	Format        string  `json:"format"`
+	Blocks        []Block `json:"blocks"`
 }
 
 type Chunk struct {
-	ID         string  `json:"id"`
-	Path       string  `json:"path"`
-	Content    string  `json:"content"`
-	Hash       string  `json:"hash"`
-	Tokens     int     `json:"tokens"`
-	LineStart  int     `json:"lineStart"`
-	LineEnd    int     `json:"lineEnd"`
-	PageStart  *int    `json:"pageStart"`
-	PageEnd    *int    `json:"pageEnd"`
-	Section    *string `json:"section"`
-	ChunkIndex int     `json:"chunkIndex"`
+	SourcePath    string  `json:"sourcePath,omitempty"`
+	Title         string  `json:"title,omitempty"`
+	Format        string  `json:"format,omitempty"`
+	ParserVersion string  `json:"parserVersion,omitempty"`
+	ID            string  `json:"id"`
+	Path          string  `json:"path"`
+	Content       string  `json:"content"`
+	Hash          string  `json:"hash"`
+	Tokens        int     `json:"tokens"`
+	LineStart     int     `json:"lineStart"`
+	LineEnd       int     `json:"lineEnd"`
+	PageStart     *int    `json:"pageStart"`
+	PageEnd       *int    `json:"pageEnd"`
+	Section       *string `json:"section"`
+	ChunkIndex    int     `json:"chunkIndex"`
 }
 
 type Hit struct {

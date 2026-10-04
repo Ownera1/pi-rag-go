@@ -9,9 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
+	"math"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Ownera1/pi-rag-go/internal/model"
@@ -20,67 +20,8 @@ import (
 const teiNS = "http://www.tei-c.org/ns/1.0"
 
 var whitespace = regexp.MustCompile(`\s+`)
-var heading = regexp.MustCompile(`^(#{1,6}) (.*)$`)
 
 func ShortHash(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:])[:12] }
-
-func Parse(ctx context.Context, path string) (model.Document, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return model.Document{}, err
-	}
-	d := model.Document{Path: path, Hash: ShortHash(string(b)), Size: int64(len(b))}
-	if strings.HasSuffix(strings.ToLower(path), ".tei.xml") {
-		d.Format = "grobid-tei"
-		d.Blocks, err = ParseTEI(ctx, b)
-		return d, err
-	}
-	text := string(b)
-	ext := strings.ToLower(filepath.Ext(path))
-	if ext == ".md" || ext == ".mdx" {
-		d.Blocks = markdown(text)
-	} else if strings.TrimSpace(text) != "" {
-		lines := strings.Split(text, "\n")
-		start, end := 1, max(1, len(lines))
-		d.Blocks = []model.Block{{Text: text, LineStart: &start, LineEnd: &end}}
-	}
-	return d, nil
-}
-
-func markdown(text string) []model.Block {
-	lines := strings.Split(text, "\n")
-	type start struct {
-		line    int
-		section *string
-	}
-	starts := []start{}
-	if !heading.MatchString(lines[0]) {
-		starts = append(starts, start{line: 1})
-	}
-	for i, line := range lines {
-		if m := heading.FindStringSubmatch(line); m != nil {
-			s := strings.TrimSpace(m[2])
-			starts = append(starts, start{line: i + 1, section: &s})
-		}
-	}
-	blocks := []model.Block{}
-	for i, p := range starts {
-		end := len(lines)
-		if i+1 < len(starts) {
-			end = starts[i+1].line - 1
-		}
-		raw := strings.Join(lines[p.line-1:end], "\n")
-		if strings.TrimSpace(raw) != "" {
-			a, b := p.line, end
-			blocks = append(blocks, model.Block{Text: raw, Section: p.section, LineStart: &a, LineEnd: &b})
-		}
-	}
-	if len(blocks) == 0 && strings.TrimSpace(text) != "" {
-		a, b := 1, len(lines)
-		return []model.Block{{Text: text, LineStart: &a, LineEnd: &b}}
-	}
-	return blocks
-}
 
 func normalize(s string) string { return strings.TrimSpace(whitespace.ReplaceAllString(s, " ")) }
 
@@ -110,27 +51,31 @@ func ParseTEI(ctx context.Context, b []byte) ([]model.Block, error) {
 	}
 	dec := xml.NewDecoder(bytes.NewReader(b))
 	blocks := []model.Block{}
-	abstract := []string{}
+	abstract := []model.Block{}
 	bodyCount := 0
 	var abstractFallback strings.Builder
 	stack := []xml.Name{}
 	divs := []frame{}
 	path := []string{}
 	paragraphs := []string{}
+	var pageStart, pageEnd, captureStart, captureEnd *int
 	var capture strings.Builder
 	capturing := ""
 	captureDepth := 0
 	skipDepth := 0
 	inHeader, inAbstract, inBody, inBack := false, false, false, false
 	rootChecked := false
+	rootClosed := false
+	elements := 0
 	currentSection := func() *string { return section(path) }
 	flush := func() {
 		if len(paragraphs) > 0 {
-			blocks = append(blocks, model.Block{Text: strings.Join(paragraphs, "\n\n"), Section: currentSection()})
+			blocks = append(blocks, model.Block{Text: strings.Join(paragraphs, "\n\n"), Section: currentSection(), PageStart: pageStart, PageEnd: pageEnd})
 			if inBody {
 				bodyCount++
 			}
 			paragraphs = nil
+			pageStart, pageEnd = nil, nil
 		}
 	}
 	skipped := func() bool {
@@ -154,6 +99,10 @@ func ParseTEI(ctx context.Context, b []byte) ([]model.Block, error) {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
+			elements++
+			if rootClosed || len(stack) >= 128 || elements > 200000 {
+				return nil, errors.New("invalid TEI root or nesting depth")
+			}
 			if !rootChecked {
 				rootChecked = true
 				if t.Name.Local != "TEI" || t.Name.Space != teiNS {
@@ -201,6 +150,15 @@ func ParseTEI(ctx context.Context, b []byte) ([]model.Block, error) {
 				}
 			case "p":
 				if (inAbstract || inBody || inBack) && !skipped() {
+					captureStart, captureEnd = nil, nil
+					for _, a := range t.Attr {
+						if a.Name.Local == "coords" {
+							captureStart, captureEnd, err = coordinatePages(a.Value)
+							if err != nil {
+								return nil, err
+							}
+						}
+					}
 					capturing = "p"
 					captureDepth = len(stack)
 					capture.Reset()
@@ -219,6 +177,9 @@ func ParseTEI(ctx context.Context, b []byte) ([]model.Block, error) {
 				}
 			}
 		case xml.CharData:
+			if len(stack) == 0 && strings.TrimSpace(string(t)) != "" {
+				return nil, errors.New("TEI text outside document root")
+			}
 			if skipDepth == 0 {
 				if capturing != "" {
 					capture.Write([]byte(t))
@@ -242,8 +203,17 @@ func ParseTEI(ctx context.Context, b []byte) ([]model.Block, error) {
 					if value != "" {
 						if capturing == "p" {
 							if inAbstract {
-								abstract = append(abstract, value)
+								sec := "Abstract"
+								if len(abstract) > 0 && samePage(abstract[len(abstract)-1].PageStart, captureStart) && samePage(abstract[len(abstract)-1].PageEnd, captureEnd) {
+									abstract[len(abstract)-1].Text += "\n\n" + value
+								} else {
+									abstract = append(abstract, model.Block{Text: value, Section: &sec, PageStart: captureStart, PageEnd: captureEnd})
+								}
 							} else {
+								if !samePage(pageStart, captureStart) || !samePage(pageEnd, captureEnd) {
+									flush()
+								}
+								pageStart, pageEnd = captureStart, captureEnd
 								paragraphs = append(paragraphs, value)
 							}
 						} else if len(divs) > 0 {
@@ -261,7 +231,8 @@ func ParseTEI(ctx context.Context, b []byte) ([]model.Block, error) {
 					inAbstract = false
 					if len(abstract) == 0 {
 						if v := normalize(abstractFallback.String()); v != "" {
-							abstract = append(abstract, v)
+							sec := "Abstract"
+							abstract = append(abstract, model.Block{Text: v, Section: &sec})
 						}
 					}
 				case "teiHeader":
@@ -281,6 +252,9 @@ func ParseTEI(ctx context.Context, b []byte) ([]model.Block, error) {
 				}
 			}
 			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				rootClosed = true
+			}
 		}
 	}
 	if !rootChecked {
@@ -290,8 +264,43 @@ func ParseTEI(ctx context.Context, b []byte) ([]model.Block, error) {
 		return nil, errors.New("TEI has no indexable body paragraphs")
 	}
 	if len(abstract) > 0 {
-		s := "Abstract"
-		blocks = append([]model.Block{{Text: strings.Join(abstract, "\n\n"), Section: &s}}, blocks...)
+		blocks = append(abstract, blocks...)
 	}
 	return blocks, nil
+}
+
+func samePage(a, b *int) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
+}
+
+// GROBID coordinates use physical, one-based PDF page numbers. XML line
+// numbers and printed journal pagination are deliberately not substituted.
+func coordinatePages(coords string) (*int, *int, error) {
+	if strings.TrimSpace(coords) == "" {
+		return nil, nil, nil
+	}
+	first, last := 0, 0
+	for _, box := range strings.Split(coords, ";") {
+		parts := strings.Split(box, ",")
+		if len(parts) != 5 {
+			return nil, nil, errors.New("invalid TEI coordinates")
+		}
+		page, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil || page < 1 {
+			return nil, nil, errors.New("invalid TEI coordinate page")
+		}
+		for _, value := range parts[1:] {
+			n, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+			if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
+				return nil, nil, errors.New("invalid TEI coordinate box")
+			}
+		}
+		if first == 0 || page < first {
+			first = page
+		}
+		if page > last {
+			last = page
+		}
+	}
+	return &first, &last, nil
 }

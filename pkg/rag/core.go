@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/Ownera1/pi-rag-go/internal/document"
 	"github.com/Ownera1/pi-rag-go/internal/model"
 	"github.com/Ownera1/pi-rag-go/internal/provider"
 	"github.com/Ownera1/pi-rag-go/internal/store"
@@ -275,7 +276,7 @@ func fingerprint(cfg Config) (string, string) {
 		Parser   string
 		Search   string
 		Chunking model.ChunkingConfig
-	}{"go-blocks-tei-v2", "han-ngrams-v1", cfg.Chunking})
+	}{document.ParserVersion, "han-ngrams-v1", cfg.Chunking})
 	eh := sha256.Sum256(emb)
 	ph := sha256.Sum256(proc)
 	return hex.EncodeToString(eh[:]), hex.EncodeToString(ph[:])

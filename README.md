@@ -1,6 +1,6 @@
 # pi-rag-go
 
-Go RAG Core for a shared local knowledge store. It parses GROBID TEI, Markdown, plain text, and source/configuration files; indexes with SQLite FTS5 and sqlite-vec; and serves structured results over MCP. The existing TypeScript `XML_parse` implementation is the migration reference.
+Go RAG Core for a shared local knowledge store. It parses GROBID TEI, JATS XML, Markdown, DOCX, HTML, MinerU results, plain text, and source/configuration files; indexes with SQLite FTS5 and sqlite-vec; and serves structured results over MCP. `ragprep` converts PDFs into canonical document packages independently of indexing. The existing TypeScript `XML_parse` implementation is the migration reference.
 
 ## Build
 
@@ -11,6 +11,7 @@ go test -tags sqlite_fts5 ./...
 go build -tags sqlite_fts5 -o bin/ragd ./cmd/ragd
 go build -tags sqlite_fts5 -o bin/ragctl ./cmd/ragctl
 go build -tags sqlite_fts5 -o bin/rageval ./cmd/rageval
+go build -o bin/ragprep ./cmd/ragprep
 ```
 
 ## Configure a new store
@@ -39,7 +40,31 @@ The MCP tools are `rag_query`, `rag_index`, `rag_status`, `rag_refresh`, `rag_li
 
 Indexing a directory adds it to the tracked paths. `refresh` rescans those paths and removes deleted files only after a complete, successful scan. `rebuild` creates a staging generation and publishes it only when all files succeed and every chunk has a vector. Store configuration and mutable indexing state are separate: `state.json` holds tracked paths and structured failed-file records. A successfully scanned root remains tracked even when some of its files fail; fixing those files and running `refresh` retries them, including after a server restart. Scan failures preserve previous failure records and prevent pruning. Partial `index`/`refresh` results retain successful writes, include `failures[{path,stage,error}]`, and cause `ragctl` to exit nonzero after printing the result. A failed rebuild leaves the active index in place.
 
-The Go version indexes `.tei.xml` files directly. To convert scholarly PDFs, use the TypeScript repository's existing GROBID `prepare:tei` command, then index only the TEI output directory. Direct PDF/OCR, DOCX, HTML conversion and Pi automatic context injection are not yet implemented in Go. Ordinary `.xml` files follow the text path.
+The indexer accepts these formats directly and chooses their parser from the extension or XML root:
+
+| Input | Parsed content | Source positions |
+| --- | --- | --- |
+| `.tei.xml`, TEI XML | Abstract, body and appendix; excludes formula, figure, table, note and references | Physical PDF pages from GROBID `coords`; no XML line numbers |
+| `.xml`/`.nxml` with `article` root | JATS abstract and nested body sections; excludes references and visual/formula subtrees | Unknown pages and lines |
+| `.md`/`.mdx` | CommonMark AST headings including Setext; raw text retained; fenced code headings stay in code | Original Markdown lines |
+| `.docx` | WordprocessingML paragraphs, headings, list text and table cell text; hidden/deleted runs excluded | Unknown pages and lines; Word layout is not rendered |
+| `.html`/`.htm` | DOM text, heading paths, main/article/body selection; navigation, scripts and hidden content excluded | Unknown pages and lines |
+| MinerU JSON | Body text, heading paths and text lists from supported exports | Explicit zero-based `page_idx` converted to one-based PDF pages |
+| `.rag-blocks.json` | Version 1 normalized body blocks | Validated explicit page ranges |
+
+Other XML remains UTF-8 text. MDX is parsed as CommonMark; JSX is retained as text without execution. Generic HTML filtering is a baseline for saved pages, not a trained article extraction model. Word tables are included as paragraph text without cell relationships. Formula, table and figure retrieval are outside the scholarly body-retrieval scope. See [document ingestion](docs/document-ingestion.md) for preprocessing commands, directory rules and parser limitations.
+
+```sh
+# Ordinary text PDF: requires Poppler's pdftotext on PATH.
+bin/ragprep convert --backend pdftotext --input /absolute/pdfs --output /absolute/converted
+# Scholarly PDF: requires a running GROBID service.
+bin/ragprep convert --backend grobid --url http://localhost:8070 --input /absolute/paper.pdf --output /absolute/converted
+# OCR/layout: requires MinerU 4's mineru-kit and its models/runtime.
+bin/ragprep convert --backend mineru --input /absolute/paper.pdf --output /absolute/converted
+bin/ragctl index /absolute/converted
+```
+
+Directly indexing an unconverted PDF reports a parse failure with preprocessing instructions. Conversion never opens the store or calls an embedding provider. Pi automatic context injection is not implemented in Go.
 
 ## Retrieval and processing settings
 
@@ -49,7 +74,7 @@ Chinese BM25 queries use an additional FTS5 index containing Han unigrams and bi
 
 `config.example.json` shows chunking thresholds, parse workers, semantic workers, and embedding batch size. Counts use the existing heuristic token estimate, not the provider's exact tokenizer. Defaults are retained for omitted JSON fields; validation rejects invalid ordering, overlap, and concurrency. Semantic chunks preserve document, page, and heading boundaries. Concurrent indexing and status calls use separate snapshots for mutable state; changes to a returned `Config()` value do not change the Core's configuration.
 
-**Existing Go indexes require `ragctl rebuild` after this upgrade.** The processing fingerprint now includes the corrected TEI parser, Chinese search index, and chunking parameters. Status reports `needsRebuild`; querying or incrementally mixing incompatible generations is rejected. Changing processing or embedding settings also requires a rebuild. Rebuild must succeed before the active generation changes. Legacy TypeScript stores remain read-only and do not acquire the new Chinese index.
+**Existing Go indexes require `ragctl rebuild` after this upgrade.** The processing fingerprint includes parser version `document-blocks-v3`, the Chinese search index, and chunking parameters. Status reports `needsRebuild`; querying or incrementally mixing incompatible generations is rejected. Changing processing or embedding settings also requires a rebuild. Rebuild must succeed before the active generation changes. Legacy TypeScript stores remain read-only and do not acquire new schema tables.
 
 ## Progress and generation cleanup
 
@@ -75,7 +100,7 @@ bin/rageval --dataset /absolute/path/to/annotated-paper-questions.jsonl --modes 
 
 The included 20 questions and short TEI passages are a **synthetic smoke dataset**, not a real-paper benchmark. The automated end-to-end test uses deterministic HTTP model stubs and proves wiring and scoring only. See [evaluation/README.md](evaluation/README.md) for passage labels, real-paper evaluation steps, and cost assumptions. Cloud-provider quality, billing, and latency must be measured with your actual provider and corpus.
 
-GitHub Actions runs race tests, vet, formatting, and command builds on Ubuntu/macOS with the minimum Go version and stable Go. The smoke evaluation is part of these tests and needs no provider credentials. Workflow action versions follow the official [checkout](https://github.com/actions/checkout) and [setup-go](https://github.com/actions/setup-go) documentation.
+GitHub Actions runs race tests, vet, formatting, and command builds on Ubuntu/macOS with the minimum Go version and stable Go. It installs Poppler to test a real PDF with a blank page between two text pages. GROBID HTTP and MinerU CLI tests use deterministic local protocol fixtures; they do not measure real engine extraction quality. The smoke evaluation needs no provider credentials. Workflow action versions follow the official [checkout](https://github.com/actions/checkout) and [setup-go](https://github.com/actions/setup-go) documentation.
 
 ## Read an existing TypeScript index
 

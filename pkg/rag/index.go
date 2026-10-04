@@ -42,7 +42,7 @@ var allowed = map[string]bool{
 	".csv": true, ".tsv": true, ".sh": true, ".bash": true, ".zsh": true,
 	".fish": true, ".ps1": true, ".sql": true, ".graphql": true, ".gql": true,
 	".proto": true, ".env": true, ".gitignore": true, ".dockerfile": true, ".tf": true,
-	".hcl": true,
+	".hcl": true, ".docx": true, ".html": true, ".htm": true, ".nxml": true, ".pdf": true,
 }
 
 func allowedFile(path string, size int64) bool {
@@ -50,8 +50,11 @@ func allowedFile(path string, size int64) bool {
 	if !allowed[ext] {
 		return false
 	}
-	if strings.HasSuffix(strings.ToLower(path), ".tei.xml") {
-		return size < 10_000_000
+	if document.IsMinerUFile(path) || strings.HasSuffix(strings.ToLower(path), ".rag-blocks.json") ||
+		strings.HasSuffix(strings.ToLower(path), ".tei.xml") ||
+		ext == ".docx" || ext == ".html" || ext == ".htm" || ext == ".nxml" || ext == ".xml" ||
+		ext == ".md" || ext == ".mdx" || ext == ".pdf" {
+		return size <= document.MaxDocumentBytes
 	}
 	return size < 500_000
 }
@@ -119,7 +122,10 @@ func scan(ctx context.Context, root string, patterns []string) ([]string, error)
 		return nil
 	})
 	sort.Strings(found)
-	return found, err
+	if err != nil {
+		return nil, err
+	}
+	return document.CanonicalFiles(ctx, found)
 }
 
 func (c *Core) Index(ctx context.Context, paths []string) (result IndexResult, err error) {
@@ -183,6 +189,11 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
+	paths, e := document.CanonicalFiles(ctx, paths)
+	if e != nil {
+		addFailure(&result, strings.Join(roots, ", "), "scan", e)
+		return result, accepted
+	}
 	c.progressTotal(len(paths))
 	if len(paths) == 0 {
 		return result, accepted
@@ -218,9 +229,8 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 					}
 				}
 				semantic := c.cfg.Chunking.Mode == "semantic" &&
-					(doc.Format == "grobid-tei" ||
-						strings.HasSuffix(strings.ToLower(p), ".md") ||
-						strings.HasSuffix(strings.ToLower(p), ".mdx") ||
+					(doc.Format != "text" ||
+						filepath.Base(p) == "rag-source.json" ||
 						strings.HasSuffix(strings.ToLower(p), ".txt"))
 				var chunks []model.Chunk
 				if semantic {
@@ -232,7 +242,7 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 					}
 					chunks, e = chunk.Semantic(ctx, doc.Blocks, c.embedder, c.cfg)
 					<-sem
-				} else if doc.Format == "grobid-tei" {
+				} else if doc.Format != "text" {
 					for _, b := range doc.Blocks {
 						for _, ch := range chunk.Legacy([]model.Block{b}, c.cfg.Chunking) {
 							ch.ChunkIndex = len(chunks)
@@ -275,6 +285,10 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 			w.chunks[i].Hash = document.ShortHash(w.chunks[i].Content)
 			w.chunks[i].Tokens = chunk.Estimate(w.chunks[i].Content)
 			w.chunks[i].Path = w.doc.Path
+			w.chunks[i].SourcePath = w.doc.SourcePath
+			w.chunks[i].Title = w.doc.Title
+			w.chunks[i].Format = w.doc.Format
+			w.chunks[i].ParserVersion = w.doc.ParserVersion
 		}
 		texts := make([]string, len(w.chunks))
 		for i, ch := range w.chunks {
@@ -336,6 +350,18 @@ func (c *Core) Refresh(ctx context.Context) (result IndexResult, err error) {
 		for _, p := range paths {
 			present[p] = true
 		}
+	}
+	presentPaths := make([]string, 0, len(present))
+	for p := range present {
+		presentPaths = append(presentPaths, p)
+	}
+	canonical, e := document.CanonicalFiles(ctx, presentPaths)
+	if e != nil {
+		return result, e
+	}
+	present = map[string]bool{}
+	for _, p := range canonical {
+		present[p] = true
 	}
 	indexed, e := c.db.List(ctx)
 	if e != nil {

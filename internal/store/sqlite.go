@@ -124,6 +124,13 @@ CREATE TABLE IF NOT EXISTS files (
     title TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_file_path ON chunks(file_path);
+CREATE TABLE IF NOT EXISTS chunk_sources (
+    chunk_id TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+    source_path TEXT NOT NULL,
+    title TEXT NOT NULL,
+    format TEXT NOT NULL,
+    parser_version TEXT NOT NULL
+);
 `, dim)
 	_, err := d.SQL.Exec(schema)
 	return err
@@ -247,6 +254,11 @@ INSERT INTO chunks (
 		if _, err = tx.ExecContext(ctx, "INSERT INTO chunks_vec(rowid,embedding) VALUES(CAST(? AS INTEGER),?)", rowid, vecBytes(vectors[i])); err != nil {
 			return err
 		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO chunk_sources
+            (chunk_id, source_path, title, format, parser_version) VALUES (?, ?, ?, ?, ?)`,
+			c.ID, doc.SourcePath, doc.Title, doc.Format, doc.ParserVersion); err != nil {
+			return err
+		}
 	}
 	if _, e = tx.ExecContext(ctx, `
 INSERT INTO files (path, hash, chunks, indexed, size, embedded, document_id, title)
@@ -259,7 +271,7 @@ ON CONFLICT(path) DO UPDATE SET
     embedded=1,
     document_id=excluded.document_id,
     title=excluded.title`,
-		doc.Path, doc.Hash, len(chunks), now, doc.Size, doc.Hash, filepath.Base(doc.Path),
+		doc.Path, doc.Hash, len(chunks), now, doc.Size, doc.ID, doc.Title,
 	); e != nil {
 		return e
 	}
@@ -371,10 +383,15 @@ func (d *DB) Chunks(ctx context.Context, ids []int64) (map[int64]model.Chunk, er
 		args[i] = id
 		placeholders[i] = "?"
 	}
-	q := `SELECT
-    rowid, id, file_path, chunk_content, line_start, line_end, chunk_hash,
-    indexed_at, tokens, page_start, page_end, section, chunk_index
-FROM chunks WHERE rowid IN (` + strings.Join(placeholders, ",") + `)`
+	columns := `chunks.rowid, chunks.id, file_path, chunk_content, line_start, line_end,
+        chunk_hash, indexed_at, tokens, page_start, page_end, section, chunk_index`
+	join := ""
+	if !d.ReadOnly {
+		columns += `, COALESCE(source_path,''), COALESCE(title,''),
+            COALESCE(format,''), COALESCE(parser_version,'')`
+		join = " LEFT JOIN chunk_sources ON chunk_sources.chunk_id=chunks.id"
+	}
+	q := "SELECT " + columns + " FROM chunks" + join + " WHERE chunks.rowid IN (" + strings.Join(placeholders, ",") + ")"
 	rows, e := d.SQL.QueryContext(ctx, q, args...)
 	if e != nil {
 		return nil, e
@@ -386,10 +403,14 @@ FROM chunks WHERE rowid IN (` + strings.Join(placeholders, ",") + `)`
 		var indexed string
 		var pageA, pageB sql.NullInt64
 		var sec sql.NullString
-		if e = rows.Scan(
+		dest := []any{
 			&id, &c.ID, &c.Path, &c.Content, &c.LineStart, &c.LineEnd, &c.Hash,
 			&indexed, &c.Tokens, &pageA, &pageB, &sec, &c.ChunkIndex,
-		); e != nil {
+		}
+		if !d.ReadOnly {
+			dest = append(dest, &c.SourcePath, &c.Title, &c.Format, &c.ParserVersion)
+		}
+		if e = rows.Scan(dest...); e != nil {
 			return nil, e
 		}
 		if pageA.Valid {
