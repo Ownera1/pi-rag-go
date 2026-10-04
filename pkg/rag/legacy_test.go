@@ -12,7 +12,26 @@ import (
 
 func TestLegacyVoyageAliasAndEndpointFingerprint(t *testing.T) {
 	root := t.TempDir()
-	registry := `{"version":1,"providers":{"proxy-voyage":{"type":"voyage","baseUrl":"https://proxy.example/v1","auth":{"type":"bearer","env":"PROXY_KEY"},"models":{"embedding":{"voyage-4-lite":{"dimensions":1024}}}}}}`
+	registry := `{
+  "version": 1,
+  "providers": {
+    "proxy-voyage": {
+      "type": "voyage",
+      "baseUrl": "https://proxy.example/v1",
+      "auth": {
+        "type": "bearer",
+        "env": "PROXY_KEY"
+      },
+      "models": {
+        "embedding": {
+          "voyage-4-lite": {
+            "dimensions": 1024
+          }
+        }
+      }
+    }
+  }
+}`
 	if err := os.WriteFile(filepath.Join(root, "provider.json"), []byte(registry), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +50,26 @@ func TestLegacyVectorContractRejectsChangedEndpoint(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	legacyConfig := `{"embedding":{"provider":"proxy-voyage","model":"voyage-4-lite","dimensions":2}}`
-	registry := `{"version":1,"providers":{"proxy-voyage":{"type":"voyage","baseUrl":"https://proxy.example/v1","auth":{"type":"bearer","env":"PROXY_KEY"},"models":{"embedding":{"voyage-4-lite":{"dimensions":2}}}}}}`
+	registry := `{
+  "version": 1,
+  "providers": {
+    "proxy-voyage": {
+      "type": "voyage",
+      "baseUrl": "https://proxy.example/v1",
+      "auth": {
+        "type": "bearer",
+        "env": "PROXY_KEY"
+      },
+      "models": {
+        "embedding": {
+          "voyage-4-lite": {
+            "dimensions": 2
+          }
+        }
+      }
+    }
+  }
+}`
 	for name, value := range map[string]string{"config.json": legacyConfig, "provider.json": registry} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(value), 0600); err != nil {
 			t.Fatal(err)

@@ -4,8 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/Ownera1/pi-rag-go/internal/mcpserver"
-	"github.com/Ownera1/pi-rag-go/pkg/rag"
 	"log/slog"
 	"net"
 	"net/http"
@@ -13,6 +11,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/Ownera1/pi-rag-go/internal/mcpserver"
+	"github.com/Ownera1/pi-rag-go/pkg/rag"
 )
 
 func main() {
@@ -21,6 +22,7 @@ func main() {
 		os.Exit(1)
 	}
 }
+
 func run() error {
 	mode := "serve"
 	if len(os.Args) > 1 && (os.Args[1] == "serve" || os.Args[1] == "stdio") {

@@ -32,8 +32,11 @@ func NewHTTP(cfg model.ProviderConfig, timeoutMs, retries int) (*HTTP, error) {
 	}
 	return &HTTP{cfg: cfg, client: &http.Client{Timeout: time.Duration(timeoutMs) * time.Millisecond}, retries: retries}, nil
 }
-func (p *HTTP) Model() string   { return p.cfg.Model }
+
+func (p *HTTP) Model() string { return p.cfg.Model }
+
 func (p *HTTP) Dimensions() int { return p.cfg.Dimensions }
+
 func (p *HTTP) post(ctx context.Context, path string, body any, out any) error {
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -86,6 +89,7 @@ func (p *HTTP) post(ctx context.Context, path string, body any, out any) error {
 	}
 	return err
 }
+
 func normalize(v []float32, dim int) ([]float32, error) {
 	if len(v) != dim {
 		return nil, fmt.Errorf("vector dimension %d, expected %d", len(v), dim)
@@ -106,6 +110,7 @@ func normalize(v []float32, dim int) ([]float32, error) {
 	}
 	return v, nil
 }
+
 func (p *HTTP) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	v, e := p.embed(ctx, []string{text}, "query")
 	if e != nil {
@@ -113,9 +118,11 @@ func (p *HTTP) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	}
 	return v[0], nil
 }
+
 func (p *HTTP) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
 	return p.embed(ctx, texts, "document")
 }
+
 func (p *HTTP) embed(ctx context.Context, texts []string, role string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return [][]float32{}, nil
@@ -161,6 +168,7 @@ func (p *HTTP) embed(ctx context.Context, texts []string, role string) ([][]floa
 	}
 	return all, nil
 }
+
 func (p *HTTP) Rerank(ctx context.Context, query string, docs []model.RerankDoc, topK int) ([]model.RerankResult, error) {
 	if len(docs) == 0 {
 		return []model.RerankResult{}, nil

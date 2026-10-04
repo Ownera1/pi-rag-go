@@ -7,7 +7,15 @@ import (
 )
 
 func TestTEISectionsAndExclusions(t *testing.T) {
-	xml := `<tei:TEI xmlns:tei="http://www.tei-c.org/ns/1.0"><tei:teiHeader><tei:profileDesc><tei:abstract><tei:p>Abstract <tei:hi>signal</tei:hi> result.</tei:p></tei:abstract></tei:profileDesc></tei:teiHeader><tei:text><tei:body><tei:div><tei:head>IV Proposed Method</tei:head><tei:p>Parent first <tei:ref>[1]</tei:ref>.</tei:p><tei:p>Parent second paragraph.</tei:p><tei:div><tei:head>B Channel Estimation</tei:head><tei:p>Child pilot data.</tei:p><tei:p>Child second <tei:formula>E=mc2</tei:formula> end.</tei:p></tei:div><tei:p>Parent final paragraph.</tei:p></tei:div><tei:figure><tei:head>Figure excluded</tei:head></tei:figure></tei:body><tei:back><tei:div type="references"><tei:p>Reference excluded</tei:p></tei:div><tei:div type="appendix"><tei:head>Appendix A Proof</tei:head><tei:p>Appendix derivation.</tei:p></tei:div></tei:back></tei:text></tei:TEI>`
+	xml := `<tei:TEI xmlns:tei="http://www.tei-c.org/ns/1.0"><tei:teiHeader><tei:profileDesc><tei:abstract>` +
+		`<tei:p>Abstract <tei:hi>signal</tei:hi> result.</tei:p></tei:abstract></tei:profileDesc></tei:teiHeader><tei:text>` +
+		`<tei:body><tei:div><tei:head>IV Proposed Method</tei:head><tei:p>Parent first <tei:ref>[1]</tei:ref>.</tei:p>` +
+		`<tei:p>Parent second paragraph.</tei:p><tei:div><tei:head>B Channel Estimation</tei:head>` +
+		`<tei:p>Child pilot data.</tei:p><tei:p>Child second <tei:formula>E=mc2</tei:formula> end.</tei:p></tei:div>` +
+		`<tei:p>Parent final paragraph.</tei:p></tei:div><tei:figure><tei:head>Figure excluded</tei:head></tei:figure>` +
+		`</tei:body><tei:back><tei:div type="references"><tei:p>Reference excluded</tei:p></tei:div>` +
+		`<tei:div type="appendix"><tei:head>Appendix A Proof</tei:head><tei:p>Appendix derivation.</tei:p></tei:div>` +
+		`</tei:back></tei:text></tei:TEI>`
 	blocks, e := ParseTEI(context.Background(), []byte(xml))
 	if e != nil {
 		t.Fatal(e)
@@ -37,6 +45,7 @@ func TestTEISectionsAndExclusions(t *testing.T) {
 		}
 	}
 }
+
 func TestTEIInvalid(t *testing.T) {
 	for _, x := range []string{`<!DOCTYPE TEI><TEI/>`, `<root xmlns="http://www.tei-c.org/ns/1.0"/>`, `<TEI xmlns="http://www.tei-c.org/ns/1.0"><text><body/></text></TEI>`} {
 		if _, e := ParseTEI(context.Background(), []byte(x)); e == nil {

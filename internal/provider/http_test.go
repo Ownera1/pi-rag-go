@@ -3,10 +3,11 @@ package provider
 import (
 	"context"
 	"encoding/json"
-	"github.com/Ownera1/pi-rag-go/internal/model"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/Ownera1/pi-rag-go/internal/model"
 )
 
 func TestVoyageRolesAndOutOfOrderEmbeddings(t *testing.T) {

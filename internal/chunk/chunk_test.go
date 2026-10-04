@@ -2,16 +2,20 @@ package chunk
 
 import (
 	"context"
-	"github.com/Ownera1/pi-rag-go/internal/model"
 	"strings"
 	"testing"
+
+	"github.com/Ownera1/pi-rag-go/internal/model"
 )
 
 type fake struct{}
 
-func (fake) Model() string                                         { return "fake" }
-func (fake) Dimensions() int                                       { return 2 }
+func (fake) Model() string { return "fake" }
+
+func (fake) Dimensions() int { return 2 }
+
 func (fake) EmbedQuery(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }
+
 func (fake) EmbedDocuments(_ context.Context, in []string) ([][]float32, error) {
 	v := make([][]float32, len(in))
 	for i, s := range in {
@@ -23,8 +27,14 @@ func (fake) EmbedDocuments(_ context.Context, in []string) ([][]float32, error) 
 	}
 	return v, nil
 }
+
 func TestSemanticGapAndProvenance(t *testing.T) {
-	s := strings.Join([]string{"ALPHA_ONE " + strings.Repeat("apples ", 38) + ".", "ALPHA_TWO " + strings.Repeat("orchards ", 38) + ".", "BETA_ONE " + strings.Repeat("circuits ", 38) + ".", "BETA_TWO " + strings.Repeat("voltage ", 38) + "."}, "\n")
+	s := strings.Join([]string{
+		"ALPHA_ONE " + strings.Repeat("apples ", 38) + ".",
+		"ALPHA_TWO " + strings.Repeat("orchards ", 38) + ".",
+		"BETA_ONE " + strings.Repeat("circuits ", 38) + ".",
+		"BETA_TWO " + strings.Repeat("voltage ", 38) + ".",
+	}, "\n")
 	line := 1
 	section := "topic"
 	chunks, e := Semantic(context.Background(), []model.Block{{Text: s, LineStart: &line, Section: &section}}, fake{})

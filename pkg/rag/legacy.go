@@ -83,5 +83,12 @@ func legacyProvider(root, providerID, modelName string, dimensions int) (model.P
 		Dimensions int    `json:"dimensions"`
 	}{providerID, entry.Type, entry.BaseURL, modelName, contractDimensions})
 	hash := sha256.Sum256(contract)
-	return model.ProviderConfig{Type: "voyage", Model: modelName, Dimensions: dimensions, BaseURL: entry.BaseURL, APIKeyEnv: entry.Auth.Env}, hex.EncodeToString(hash[:])[:16], nil
+	config := model.ProviderConfig{
+		Type:       "voyage",
+		Model:      modelName,
+		Dimensions: dimensions,
+		BaseURL:    entry.BaseURL,
+		APIKeyEnv:  entry.Auth.Env,
+	}
+	return config, hex.EncodeToString(hash[:])[:16], nil
 }

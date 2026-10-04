@@ -16,9 +16,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Ownera1/pi-rag-go/internal/model"
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/Ownera1/pi-rag-go/internal/model"
 )
 
 var loadOnce sync.Once
@@ -70,22 +71,59 @@ func Open(path string, readOnly bool, dimensions int) (*DB, error) {
 	}
 	return out, nil
 }
+
 func (d *DB) Close() error { return d.SQL.Close() }
+
 func (d *DB) Init(dim int) error {
 	if dim < 1 || dim > 4096 {
 		return errors.New("invalid vector dimensions")
 	}
-	schema := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS chunks(id TEXT PRIMARY KEY,file_path TEXT NOT NULL,chunk_content TEXT NOT NULL,line_start INTEGER NOT NULL,line_end INTEGER NOT NULL,chunk_hash TEXT NOT NULL,indexed_at TEXT NOT NULL,tokens INTEGER NOT NULL,page_start INTEGER,page_end INTEGER,section TEXT,chunk_index INTEGER NOT NULL DEFAULT 0);
- CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(chunk_content,file_path,content_rowid=rowid);
- CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN INSERT INTO chunks_fts(rowid,chunk_content,file_path) VALUES(new.rowid,new.chunk_content,new.file_path); END;
- CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN DELETE FROM chunks_fts WHERE rowid=old.rowid; END;
- CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(embedding float[%d]);
- CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY,hash TEXT NOT NULL,chunks INTEGER NOT NULL,indexed TEXT NOT NULL,size INTEGER NOT NULL,embedded INTEGER NOT NULL DEFAULT 0,document_id TEXT,title TEXT);
- CREATE INDEX IF NOT EXISTS idx_chunks_file_path ON chunks(file_path);`, dim)
+	schema := fmt.Sprintf(`
+CREATE TABLE IF NOT EXISTS metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chunks (
+    id TEXT PRIMARY KEY,
+    file_path TEXT NOT NULL,
+    chunk_content TEXT NOT NULL,
+    line_start INTEGER NOT NULL,
+    line_end INTEGER NOT NULL,
+    chunk_hash TEXT NOT NULL,
+    indexed_at TEXT NOT NULL,
+    tokens INTEGER NOT NULL,
+    page_start INTEGER,
+    page_end INTEGER,
+    section TEXT,
+    chunk_index INTEGER NOT NULL DEFAULT 0
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    chunk_content, file_path, content_rowid=rowid
+);
+CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+    INSERT INTO chunks_fts(rowid, chunk_content, file_path)
+    VALUES(new.rowid, new.chunk_content, new.file_path);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+    DELETE FROM chunks_fts WHERE rowid=old.rowid;
+END;
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(embedding float[%d]);
+CREATE TABLE IF NOT EXISTS files (
+    path TEXT PRIMARY KEY,
+    hash TEXT NOT NULL,
+    chunks INTEGER NOT NULL,
+    indexed TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    embedded INTEGER NOT NULL DEFAULT 0,
+    document_id TEXT,
+    title TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_chunks_file_path ON chunks(file_path);
+`, dim)
 	_, err := d.SQL.Exec(schema)
 	return err
 }
+
 func ResolvePath(root string) (string, error) {
 	b, err := os.ReadFile(filepath.Join(root, "active.json"))
 	if err != nil {
@@ -114,15 +152,18 @@ func ResolvePath(root string) (string, error) {
 	}
 	return p, nil
 }
+
 func (d *DB) GetMetadata(ctx context.Context, key string) string {
 	var v string
 	_ = d.SQL.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key=?", key).Scan(&v)
 	return v
 }
+
 func (d *DB) SetMetadata(ctx context.Context, key, value string) error {
 	_, e := d.SQL.ExecContext(ctx, "INSERT OR REPLACE INTO metadata(key,value) VALUES(?,?)", key, value)
 	return e
 }
+
 func (d *DB) Stats(ctx context.Context) (model.Status, error) {
 	if d == nil {
 		return model.Status{TrackedPaths: []string{}}, nil
@@ -141,6 +182,7 @@ func (d *DB) Stats(ctx context.Context) (model.Status, error) {
 	s.Dimensions, _ = strconv.Atoi(d.GetMetadata(ctx, "embedding_dimensions"))
 	return s, nil
 }
+
 func (d *DB) FileHash(ctx context.Context, path string) (string, bool, error) {
 	var hash string
 	var embedded int
@@ -150,6 +192,7 @@ func (d *DB) FileHash(ctx context.Context, path string) (string, bool, error) {
 	}
 	return hash, embedded != 0, e
 }
+
 func vecBytes(v []float32) []byte {
 	b := make([]byte, 4*len(v))
 	for i, x := range v {
@@ -157,6 +200,7 @@ func vecBytes(v []float32) []byte {
 	}
 	return b
 }
+
 func (d *DB) Replace(ctx context.Context, doc model.Document, chunks []model.Chunk, vectors [][]float32) error {
 	if d.ReadOnly {
 		return errors.New("read-only store")
@@ -177,7 +221,14 @@ func (d *DB) Replace(ctx context.Context, doc model.Document, chunks []model.Chu
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for i, c := range chunks {
-		r, err := tx.ExecContext(ctx, `INSERT INTO chunks(id,file_path,chunk_content,line_start,line_end,chunk_hash,indexed_at,tokens,page_start,page_end,section,chunk_index) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, c.ID, doc.Path, c.Content, c.LineStart, c.LineEnd, c.Hash, now, c.Tokens, c.PageStart, c.PageEnd, c.Section, c.ChunkIndex)
+		r, err := tx.ExecContext(ctx, `
+INSERT INTO chunks (
+    id, file_path, chunk_content, line_start, line_end, chunk_hash,
+    indexed_at, tokens, page_start, page_end, section, chunk_index
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			c.ID, doc.Path, c.Content, c.LineStart, c.LineEnd, c.Hash,
+			now, c.Tokens, c.PageStart, c.PageEnd, c.Section, c.ChunkIndex,
+		)
 		if err != nil {
 			return err
 		}
@@ -189,11 +240,24 @@ func (d *DB) Replace(ctx context.Context, doc model.Document, chunks []model.Chu
 			return err
 		}
 	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO files(path,hash,chunks,indexed,size,embedded,document_id,title) VALUES(?,?,?,?,?,1,?,?) ON CONFLICT(path) DO UPDATE SET hash=excluded.hash,chunks=excluded.chunks,indexed=excluded.indexed,size=excluded.size,embedded=1,document_id=excluded.document_id,title=excluded.title`, doc.Path, doc.Hash, len(chunks), now, doc.Size, doc.Hash, filepath.Base(doc.Path)); e != nil {
+	if _, e = tx.ExecContext(ctx, `
+INSERT INTO files (path, hash, chunks, indexed, size, embedded, document_id, title)
+VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+ON CONFLICT(path) DO UPDATE SET
+    hash=excluded.hash,
+    chunks=excluded.chunks,
+    indexed=excluded.indexed,
+    size=excluded.size,
+    embedded=1,
+    document_id=excluded.document_id,
+    title=excluded.title`,
+		doc.Path, doc.Hash, len(chunks), now, doc.Size, doc.Hash, filepath.Base(doc.Path),
+	); e != nil {
 		return e
 	}
 	return tx.Commit()
 }
+
 func (d *DB) Delete(ctx context.Context, path string) error {
 	if d.ReadOnly {
 		return errors.New("read-only store")
@@ -214,6 +278,7 @@ func (d *DB) Delete(ctx context.Context, path string) error {
 	}
 	return tx.Commit()
 }
+
 func (d *DB) List(ctx context.Context) ([]string, error) {
 	rows, e := d.SQL.QueryContext(ctx, "SELECT path FROM files ORDER BY path")
 	if e != nil {
@@ -252,6 +317,7 @@ func (d *DB) FTS(ctx context.Context, query string, limit int) ([]Match, error) 
 	}
 	return out, rows.Err()
 }
+
 func (d *DB) Vectors(ctx context.Context, vector []float32, limit int) ([]Match, error) {
 	rows, e := d.SQL.QueryContext(ctx, "SELECT rowid,distance FROM chunks_vec WHERE embedding MATCH ? LIMIT ?", vecBytes(vector), limit)
 	if e != nil {
@@ -268,6 +334,7 @@ func (d *DB) Vectors(ctx context.Context, vector []float32, limit int) ([]Match,
 	}
 	return out, rows.Err()
 }
+
 func (d *DB) Chunks(ctx context.Context, ids []int64) (map[int64]model.Chunk, error) {
 	out := map[int64]model.Chunk{}
 	if len(ids) == 0 {
@@ -279,7 +346,10 @@ func (d *DB) Chunks(ctx context.Context, ids []int64) (map[int64]model.Chunk, er
 		args[i] = id
 		placeholders[i] = "?"
 	}
-	q := `SELECT rowid,id,file_path,chunk_content,line_start,line_end,chunk_hash,indexed_at,tokens,page_start,page_end,section,chunk_index FROM chunks WHERE rowid IN (` + strings.Join(placeholders, ",") + `)`
+	q := `SELECT
+    rowid, id, file_path, chunk_content, line_start, line_end, chunk_hash,
+    indexed_at, tokens, page_start, page_end, section, chunk_index
+FROM chunks WHERE rowid IN (` + strings.Join(placeholders, ",") + `)`
 	rows, e := d.SQL.QueryContext(ctx, q, args...)
 	if e != nil {
 		return nil, e
@@ -291,7 +361,10 @@ func (d *DB) Chunks(ctx context.Context, ids []int64) (map[int64]model.Chunk, er
 		var indexed string
 		var pageA, pageB sql.NullInt64
 		var sec sql.NullString
-		if e = rows.Scan(&id, &c.ID, &c.Path, &c.Content, &c.LineStart, &c.LineEnd, &c.Hash, &indexed, &c.Tokens, &pageA, &pageB, &sec, &c.ChunkIndex); e != nil {
+		if e = rows.Scan(
+			&id, &c.ID, &c.Path, &c.Content, &c.LineStart, &c.LineEnd, &c.Hash,
+			&indexed, &c.Tokens, &pageA, &pageB, &sec, &c.ChunkIndex,
+		); e != nil {
 			return nil, e
 		}
 		if pageA.Valid {

@@ -14,15 +14,36 @@ import (
 	"sync"
 	"time"
 
+	gitignore "github.com/sabhiram/go-gitignore"
+
 	"github.com/Ownera1/pi-rag-go/internal/chunk"
 	"github.com/Ownera1/pi-rag-go/internal/document"
 	"github.com/Ownera1/pi-rag-go/internal/model"
 	"github.com/Ownera1/pi-rag-go/internal/store"
-	gitignore "github.com/sabhiram/go-gitignore"
 )
 
-var skipDirs = map[string]bool{"node_modules": true, ".git": true, ".next": true, "dist": true, "build": true, "__pycache__": true, ".venv": true, "venv": true, ".cache": true}
-var allowed = map[string]bool{".md": true, ".mdx": true, ".txt": true, ".rst": true, ".ts": true, ".tsx": true, ".js": true, ".jsx": true, ".mjs": true, ".cjs": true, ".py": true, ".rs": true, ".go": true, ".java": true, ".kt": true, ".kts": true, ".scala": true, ".c": true, ".cc": true, ".cpp": true, ".cxx": true, ".h": true, ".hpp": true, ".hxx": true, ".cs": true, ".fs": true, ".vb": true, ".swift": true, ".m": true, ".mm": true, ".rb": true, ".php": true, ".pl": true, ".lua": true, ".dart": true, ".ex": true, ".exs": true, ".erl": true, ".clj": true, ".cljs": true, ".edn": true, ".vue": true, ".svelte": true, ".astro": true, ".css": true, ".scss": true, ".sass": true, ".less": true, ".json": true, ".jsonc": true, ".yaml": true, ".yml": true, ".toml": true, ".ini": true, ".xml": true, ".csv": true, ".tsv": true, ".sh": true, ".bash": true, ".zsh": true, ".fish": true, ".ps1": true, ".sql": true, ".graphql": true, ".gql": true, ".proto": true, ".env": true, ".gitignore": true, ".dockerfile": true, ".tf": true, ".hcl": true}
+var skipDirs = map[string]bool{
+	"node_modules": true, ".git": true, ".next": true, "dist": true, "build": true,
+	"__pycache__": true, ".venv": true, "venv": true, ".cache": true,
+}
+
+var allowed = map[string]bool{
+	".md": true, ".mdx": true, ".txt": true, ".rst": true, ".ts": true,
+	".tsx": true, ".js": true, ".jsx": true, ".mjs": true, ".cjs": true,
+	".py": true, ".rs": true, ".go": true, ".java": true, ".kt": true,
+	".kts": true, ".scala": true, ".c": true, ".cc": true, ".cpp": true,
+	".cxx": true, ".h": true, ".hpp": true, ".hxx": true, ".cs": true,
+	".fs": true, ".vb": true, ".swift": true, ".m": true, ".mm": true,
+	".rb": true, ".php": true, ".pl": true, ".lua": true, ".dart": true,
+	".ex": true, ".exs": true, ".erl": true, ".clj": true, ".cljs": true,
+	".edn": true, ".vue": true, ".svelte": true, ".astro": true, ".css": true,
+	".scss": true, ".sass": true, ".less": true, ".json": true, ".jsonc": true,
+	".yaml": true, ".yml": true, ".toml": true, ".ini": true, ".xml": true,
+	".csv": true, ".tsv": true, ".sh": true, ".bash": true, ".zsh": true,
+	".fish": true, ".ps1": true, ".sql": true, ".graphql": true, ".gql": true,
+	".proto": true, ".env": true, ".gitignore": true, ".dockerfile": true, ".tf": true,
+	".hcl": true,
+}
 
 func allowedFile(path string, size int64) bool {
 	ext := strings.ToLower(filepath.Ext(path))
@@ -34,6 +55,7 @@ func allowedFile(path string, size int64) bool {
 	}
 	return size < 500_000
 }
+
 func scan(root string, patterns []string) ([]string, error) {
 	root, e := filepath.Abs(root)
 	if e != nil {
@@ -93,6 +115,7 @@ func scan(root string, patterns []string) ([]string, error) {
 	sort.Strings(found)
 	return found, err
 }
+
 func (c *Core) loadState() {
 	b, e := os.ReadFile(filepath.Join(c.root, "state.json"))
 	if e == nil {
@@ -104,6 +127,7 @@ func (c *Core) loadState() {
 		}
 	}
 }
+
 func (c *Core) saveState() error {
 	b, e := json.MarshalIndent(struct {
 		TrackedPaths []string `json:"trackedPaths"`
@@ -118,6 +142,7 @@ func (c *Core) saveState() error {
 	}
 	return os.Rename(tmp, path)
 }
+
 func (c *Core) Index(ctx context.Context, paths []string) (IndexResult, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -144,6 +169,7 @@ func (c *Core) Index(ctx context.Context, paths []string) (IndexResult, error) {
 	}
 	return result, nil
 }
+
 func contains(xs []string, s string) bool {
 	for _, x := range xs {
 		if x == s {
@@ -213,7 +239,11 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 						continue
 					}
 				}
-				semantic := c.cfg.Chunking.Mode == "semantic" && (doc.Format == "grobid-tei" || strings.HasSuffix(strings.ToLower(p), ".md") || strings.HasSuffix(strings.ToLower(p), ".mdx") || strings.HasSuffix(strings.ToLower(p), ".txt"))
+				semantic := c.cfg.Chunking.Mode == "semantic" &&
+					(doc.Format == "grobid-tei" ||
+						strings.HasSuffix(strings.ToLower(p), ".md") ||
+						strings.HasSuffix(strings.ToLower(p), ".mdx") ||
+						strings.HasSuffix(strings.ToLower(p), ".txt"))
 				var chunks []model.Chunk
 				if semantic {
 					sem <- struct{}{}
@@ -280,6 +310,7 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 	}
 	return result
 }
+
 func (c *Core) Refresh(ctx context.Context) (IndexResult, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -322,11 +353,13 @@ func (c *Core) Refresh(ctx context.Context) (IndexResult, error) {
 	}
 	return result, nil
 }
+
 func randomID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%d-%s", time.Now().UnixNano(), hex.EncodeToString(b))
 }
+
 func (c *Core) publish(ctx context.Context, stage *store.DB, stageDir string) error {
 	st, e := stage.Stats(ctx)
 	if e != nil {
@@ -388,6 +421,7 @@ func (c *Core) publish(ctx context.Context, stage *store.DB, stageDir string) er
 	}
 	return nil
 }
+
 func (c *Core) Rebuild(ctx context.Context) (IndexResult, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -422,6 +456,7 @@ func (c *Core) Rebuild(ctx context.Context) (IndexResult, error) {
 	open = false
 	return result, nil
 }
+
 func (c *Core) Clear(ctx context.Context) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
