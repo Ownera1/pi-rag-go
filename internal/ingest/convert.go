@@ -26,6 +26,8 @@ import (
 
 const maxPDFBytes = 100 << 20
 
+var ErrSourceChanged = errors.New("PDF changed during conversion; retry when the file is stable")
+
 type Options struct {
 	Backend          string
 	Input            string
@@ -98,6 +100,13 @@ func Convert(ctx context.Context, opt Options) (Result, error) {
 	}
 	if err != nil {
 		return Result{}, err
+	}
+	current, err := boundedRead(input, maxPDFBytes)
+	if err != nil {
+		return Result{}, err
+	}
+	if hash(current) != hash(pdf) {
+		return Result{}, ErrSourceChanged
 	}
 	return publish(ctx, opt.Output, input, hash(pdf), format, suffix, content)
 }

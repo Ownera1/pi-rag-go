@@ -2,41 +2,111 @@
 
 Go RAG Core for a shared local knowledge store. It parses GROBID TEI, JATS XML, Markdown, DOCX, HTML, MinerU results, plain text, and source/configuration files; indexes with SQLite FTS5 and sqlite-vec; and serves structured results over MCP. `ragprep` converts PDFs into canonical document packages independently of indexing. The existing TypeScript `XML_parse` implementation is the migration reference.
 
-## Build
+## Install and start
 
-Requires Go 1.25+, CGO and a C compiler. On macOS, Xcode command line tools satisfy the compiler requirement.
+Install precompiled macOS/Linux binaries for arm64 and amd64. On macOS, Homebrew installs all five commands:
 
 ```sh
-go test -tags sqlite_fts5 ./...
+brew install --cask ownera1/tap/rag-go
+rag init
+rag service install
+rag connect claude
+rag connect codex
+rag add ~/Papers
+rag query 'channel estimation'
+rag status
+```
+
+`rag init` prompts for the PDF backend and provider credential in a terminal. The default embedding provider is Voyage (`voyage-4-lite`, 1024 dimensions). For `pdftotext`, install Poppler first (`brew install poppler` on macOS, `sudo apt install poppler-utils` on Debian/Ubuntu). GROBID requires a running HTTP service; MinerU requires its separately installed runtime/models. The initializer checks the selected converter and probes the embedding endpoint. `--offline` skips only the embedding probe and reports that it was not checked.
+
+The script installer needs curl, tar and SHA-256 tools, without Go or a C compiler. Download and run a released installer or the repository script:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Ownera1/rag-go/main/scripts/install.sh -o /tmp/rag-go-install.sh
+sh /tmp/rag-go-install.sh                    # latest stable release
+sh /tmp/rag-go-install.sh --version vX.Y.Z  # a specific published release
+```
+
+It installs all five commands to `~/.local/bin`; add that directory to PATH. Upgrade with `brew upgrade --cask ownera1/tap/rag-go` or rerun the installer, then `rag service restart`. Uninstall the service with `rag service uninstall` before removing the binaries. The installer verifies checksums before replacing existing commands. Linux archives use glibc (built on Ubuntu 22.04); Alpine/musl and Windows packages are outside this release.
+
+## Initialize and configure
+
+The default store is `~/Library/Application Support/rag-go` on macOS and `${XDG_DATA_HOME:-~/.local/share}/rag-go` on Linux. `--store` overrides it before or after the subcommand. One user service owns one store; the default HTTP MCP endpoint is `http://127.0.0.1:7331/mcp`.
+
+```sh
+rag init --store /absolute/new-store --pdf-backend pdftotext
+# OpenAI-compatible endpoint: provide the exact model and dimensions.
+rag init --store /absolute/local-store --embedding-type openai \
+  --base-url http://127.0.0.1:11434/v1 --model YOUR_MODEL --dimensions YOUR_DIMENSIONS \
+  --api-key-env= --pdf-backend pdftotext
+# Configure a scholarly PDF service:
+rag init --store /absolute/new-store --pdf-backend grobid --pdf-url http://127.0.0.1:8070
+```
+
+An environment variable named by `apiKeyEnv` supplies the provider credential. Initialization saves available credentials, or prompts with hidden input, to `<store>/credentials.json` with permission `0600`; the directory is created with permission `0700`. The daemon reads that file and fills only unset environment variables. Secrets stay out of `config.json`, the database and status output. Set each credential environment variable before a noninteractive initialization. Repeating initialization preserves current provider settings and diagnoses them; malformed configs are rejected without overwrite. Explicit `--pdf-backend` updates the conversion configuration and `--enable-auto-refresh` enables watching for an existing store. Restart the service after configuration changes.
+
+Provider, reranking, chunking and retrieval settings remain in `<store>/config.json`; `config.example.json` documents their defaults. `rag serve --config /absolute/config.json` can load another config. OpenAI-compatible embedding endpoints must accept `POST {baseUrl}/embeddings` with `model` and `input`, and return `data[{index,embedding}]`. For reranking, configure `voyage` or `http`; the generic protocol sends `{model,query,documents,top_n}` to `POST {baseUrl}/rerank` and expects `results[{index,relevance_score}]`. `none` disables reranking.
+
+## Service, Agents and automatic ingestion
+
+`rag service install` enables login-session startup, starts the service and waits for MCP readiness. macOS uses `launchctl` and a LaunchAgent; Linux uses `systemctl --user`. Linux without linger runs for the user session; `rag service status` reports that lifetime. Service commands are `install`, `start`, `stop`, `restart`, `status`, and `uninstall`. macOS logs are under `<store>/logs/`; Linux logs are available with `journalctl --user -u rag-go.service`. Uninstallation preserves the knowledge store.
+
+Agent registration calls the official `claude mcp` or `codex mcp` CLI and does not edit their files directly. Claude registrations use user scope. An identical `rag-go` registration is retained; a conflicting entry requires `rag connect TARGET --replace`. Reload the Agent after registration. `rag connect TARGET --endpoint URL` registers an explicit loopback MCP URL. Registration and service readiness are separate checks.
+
+```sh
+rag serve                         # foreground alternative to service install
+rag stdio                         # forward stdio clients to the same HTTP daemon
+rag add /absolute/papers           # first index and persist tracking
+rag query '信道估计' --mode bm25
+rag refresh                       # immediate manual refresh
+rag rebuild
+rag remove /absolute/papers        # untrack and remove exclusive index entries
+```
+
+Newly initialized stores enable recursive watching with 3-second debounce, startup refresh and a 5-minute reconciliation scan. File events arriving during a refresh are merged into a subsequent pass. Transient conversion/indexing failures retry from 30 seconds up to 5 minutes; stable deterministic failures remain visible until a file changes or a manual refresh occurs. `rag status` includes `autoRefresh`, persisted `failedFiles`, and current `progress`. `pending` counts coalesced refresh passes, not individual files. Changing tracked roots updates watcher subscriptions automatically.
+
+PDF conversion reuses the selected backend and publishes one canonical package in `<store>/prepared/`. Unchanged input and conversion settings reuse the package; unchanged document hashes skip embedding. Explicit canonical packages in the source scan take precedence over matching PDFs. Conversion failures retain the old index and never switch engines automatically. Original-to-canonical mappings are persisted in `state.json`; deleting the original removes its index entry after a complete successful refresh, even though cached artifacts remain. `remove` accepts exact registered roots and preserves entries still covered by another tracked root. Source files and cached conversions are retained. The store directory is excluded from source scanning and watching.
+
+Existing configs without runtime settings retain manual refresh behavior. The runtime configuration is independent of processing/embedding fingerprints:
+
+```json
+"runtime": {
+  "listen": "127.0.0.1:7331",
+  "pdf": {"backend": "pdftotext", "command": "/absolute/bin/pdftotext", "timeoutMs": 600000},
+  "autoRefresh": {"enabled": true, "debounceMs": 3000, "rescanMs": 300000}
+}
+```
+
+The old `ragd`, `ragctl`, `ragprep`, and `rageval` commands remain available and share command implementations with `rag`. Legacy `ragctl` flags precede the subcommand; `rag` also accepts flags after it. Results use JSON on stdout; diagnostics and prompts use stderr. Partial indexing failures print the report and return nonzero.
+
+## Build from source
+
+Requires Go 1.25+, CGO and a C compiler. On macOS, Xcode command line tools supply the compiler.
+
+```sh
+go test -race -tags sqlite_fts5 ./...
+go build -tags sqlite_fts5 -o bin/rag ./cmd/rag
 go build -tags sqlite_fts5 -o bin/ragd ./cmd/ragd
 go build -tags sqlite_fts5 -o bin/ragctl ./cmd/ragctl
+go build -tags sqlite_fts5 -o bin/ragprep ./cmd/ragprep
 go build -tags sqlite_fts5 -o bin/rageval ./cmd/rageval
-go build -o bin/ragprep ./cmd/ragprep
 ```
 
-## Configure a new store
-
-Copy `config.example.json` to a separate store directory as `config.json`, then set `VOYAGE_API_KEY` for the example Voyage provider. `ragd --config /absolute/config.json` can load a different config path. Credentials are read from the environment and are never stored in the index or returned by `rag_status`.
-
-For an OpenAI-compatible embedding service, set `embedding.type` to `openai`, `embedding.baseUrl` to the service's API prefix, and provide its exact model and dimensions. Set `apiKeyEnv` only when authentication is required. The server must accept `POST {baseUrl}/embeddings` with `model` and `input`, and return `data[{index,embedding}]`.
-
-For reranking, set `reranker.type` to `voyage` or `http`. The generic HTTP protocol sends `{model,query,documents,top_n}` to `POST {baseUrl}/rerank` and expects `results[{index,relevance_score}]`. `none` disables reranking.
-
-## Run
+To produce a native archive and exercise extracted binaries:
 
 ```sh
-bin/ragd serve --store /absolute/path/to/new-store
-bin/ragctl status
-bin/ragctl index /absolute/path/to/tei-or-text-directory
-bin/ragctl query 'channel estimation'
-bin/ragctl refresh
-bin/ragctl rebuild
-bin/ragctl list
+./scripts/package.sh v0.0.0-local dist
+mkdir -p /tmp/rag-go-extracted
+tar -xzf dist/rag-go_v0.0.0-local_$(go env GOOS)_$(go env GOARCH).tar.gz -C /tmp/rag-go-extracted
+python3 scripts/smoke-release.py /tmp/rag-go-extracted
+python3 scripts/test-release.py
 ```
 
-`ragd` binds `127.0.0.1:7331` and serves Streamable HTTP MCP at `http://127.0.0.1:7331/mcp`. Clients that only support stdio can launch `bin/ragd stdio --endpoint http://127.0.0.1:7331/mcp`; this forwards calls to the same service and does not open a second SQLite writer. Pass CLI flags before the subcommand, for example `bin/ragctl --mode bm25 query text`. Logs go to stderr; CLI results are JSON on stdout.
+Native service acceptance is opt-in: set `RAG_TEST_BINARY` to an absolute built `rag` path and run `go test -tags sqlite_fts5 -count=1 -run '^TestRealUserServiceLifecycle$' -v ./internal/command`. On macOS also set `RAG_TEST_LAUNCHAGENT=1` from a GUI login session; the test uses a temporary plist and store, then unloads the job. On a disposable Linux user session set `RAG_TEST_SYSTEMD=1`; it temporarily installs a user unit, then removes it. Existing rag-go services are preserved by skipping this test. The release matrix runs the Linux test on both architectures.
 
-The MCP tools are `rag_query`, `rag_index`, `rag_status`, `rag_refresh`, `rag_list_documents`, `rag_rebuild`, `rag_clear`, and `rag_cleanup`. `rag_clear` requires `confirm=true`; the CLI equivalent is `bin/ragctl --confirm clear`. The clear operation publishes an empty generation and retains older generations and tracked paths.
+Tag-triggered releases build and test all four native platforms, verify downloaded release checksums, publish the release, then update the Homebrew Cask. Publication uses the repository's automatic `GITHUB_TOKEN`. Tap updates use a write-enabled SSH deploy key on `Ownera1/homebrew-tap`; its private key is the `HOMEBREW_TAP_SSH_KEY` Actions secret in this repository. The Tap must have an initial default-branch commit. Pull requests run archive smoke tests without publishing. Live provider quality, actual GROBID/MinerU extraction, login/reboot behavior, and Agent tool use require separate acceptance evidence from unit/protocol tests.
+
+The MCP tools are `rag_query`, `rag_index`, `rag_status`, `rag_refresh`, `rag_list_documents`, `rag_rebuild`, `rag_clear`, `rag_cleanup`, and `rag_remove`. `rag_clear` requires `confirm=true`; the CLI equivalent is `bin/ragctl --confirm clear`. The clear operation publishes an empty generation and retains older generations and tracked paths.
 
 Indexing a directory adds it to the tracked paths. `refresh` rescans those paths and removes deleted files only after a complete, successful scan. `rebuild` creates a staging generation and publishes it only when all files succeed and every chunk has a vector. Store configuration and mutable indexing state are separate: `state.json` holds tracked paths and structured failed-file records. A successfully scanned root remains tracked even when some of its files fail; fixing those files and running `refresh` retries them, including after a server restart. Scan failures preserve previous failure records and prevent pruning. Partial `index`/`refresh` results retain successful writes, include `failures[{path,stage,error}]`, and cause `ragctl` to exit nonzero after printing the result. A failed rebuild leaves the active index in place.
 
@@ -64,7 +134,7 @@ bin/ragprep convert --backend mineru --input /absolute/paper.pdf --output /absol
 bin/ragctl index /absolute/converted
 ```
 
-Directly indexing an unconverted PDF reports a parse failure with preprocessing instructions. Conversion never opens the store or calls an embedding provider. Pi automatic context injection is not implemented in Go.
+Without a configured daemon PDF backend, directly indexing an unconverted PDF reports a parse failure with preprocessing instructions. Conversion never opens the store or calls an embedding provider. Pi automatic context injection is not implemented in Go.
 
 ## Retrieval and processing settings
 
@@ -113,4 +183,4 @@ Normal Go mode refuses an existing database without the Go storage marker, so pa
 
 ## Go API
 
-`pkg/rag` exposes `Open(Options)`, `Core.Index`, `Query`, `Refresh`, `Rebuild`, `Status`, `ListDocuments`, `Clear`, `Cleanup`, and `Close`. Options supply the store directory and optional model providers. Core methods accept `context.Context`; results contain chunk text, scores and source positions, without Pi-specific prompt formatting.
+`pkg/rag` exposes `Open(Options)`, `Core.Index`, `Query`, `Refresh`, `Rebuild`, `Status`, `ListDocuments`, `Clear`, `Cleanup`, `Remove`, and `Close`. Options supply the store directory and optional model providers. An optional `Options.SourcePreparer` resolves original paths to canonical artifacts without introducing conversion dependencies into Core. Core methods accept `context.Context`; results contain chunk text, scores and source positions, without Pi-specific prompt formatting.

@@ -79,7 +79,11 @@ func (p *HTTP) post(ctx context.Context, path string, body any, out any) error {
 				err = readErr
 				retry = true
 			} else if res.StatusCode < 200 || res.StatusCode >= 300 {
-				err = fmt.Errorf("model HTTP %d: %s", res.StatusCode, string(raw[:min(len(raw), 200)]))
+				message := string(raw)
+				if key := os.Getenv(p.cfg.APIKeyEnv); key != "" {
+					message = strings.ReplaceAll(message, key, "[redacted]")
+				}
+				err = fmt.Errorf("model HTTP %d: %s", res.StatusCode, message[:min(len(message), 200)])
 				retry = res.StatusCode == 429 || res.StatusCode >= 500
 			} else {
 				return json.Unmarshal(raw, out)

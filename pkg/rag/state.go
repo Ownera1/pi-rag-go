@@ -14,6 +14,7 @@ import (
 )
 
 type savedState struct {
+	SourcePaths  map[string]string   `json:"sourcePaths,omitempty"`
 	TrackedPaths []string            `json:"trackedPaths"`
 	FailedFiles  []model.FileFailure `json:"failedFiles"`
 }
@@ -35,6 +36,9 @@ func (c *Core) loadState() error {
 	}
 	if s.FailedFiles != nil {
 		c.failedFiles = s.FailedFiles
+	}
+	if s.SourcePaths != nil {
+		c.sourcePaths = s.SourcePaths
 	}
 	return nil
 }
@@ -86,7 +90,7 @@ func (c *Core) updateState(roots []string, failures []model.FileFailure) {
 
 func (c *Core) saveState() error {
 	paths, failures, _ := c.stateSnapshot()
-	b, err := json.MarshalIndent(savedState{paths, failures}, "", "  ")
+	b, err := json.MarshalIndent(savedState{TrackedPaths: paths, FailedFiles: failures, SourcePaths: c.sourceSnapshot()}, "", "  ")
 	if err != nil {
 		return err
 	}

@@ -1,0 +1,137 @@
+name: Release binaries
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: darwin
+            arch: arm64
+          - runner: macos-15-intel
+            platform: darwin
+            arch: amd64
+          - runner: ubuntu-22.04
+            platform: linux
+            arch: amd64
+          - runner: ubuntu-22.04-arm
+            platform: linux
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      CGO_ENABLED: '1'
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.25.x'
+      - name: Install real PDF extractor
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y poppler-utils
+          else
+            brew list poppler >/dev/null 2>&1 || brew install poppler
+          fi
+      - name: Check and test
+        shell: bash
+        run: |
+          test -z "$(gofmt -l $(git ls-files '*.go'))"
+          test "$(go env GOOS)" = '${{ matrix.platform }}'
+          test "$(go env GOARCH)" = '${{ matrix.arch }}'
+          go test -race -tags sqlite_fts5 -count=1 ./...
+          go vet -tags sqlite_fts5 ./...
+      - name: Package and exercise extracted binaries
+        shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          version=v0.0.0-ci
+          if [[ "$REF_TYPE" == tag ]]; then version="$REF_NAME"; fi
+          ./scripts/package.sh "$version" dist
+          mkdir extracted
+          tar -xzf "dist/rag-go_${version}_${{ matrix.platform }}_${{ matrix.arch }}.tar.gz" -C extracted
+          python3 scripts/smoke-release.py extracted
+          python3 scripts/test-release.py
+      - name: Exercise real Linux user service
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          RAG_TEST_SYSTEMD=1 RAG_TEST_BINARY="$PWD/extracted/rag" go test -tags sqlite_fts5 -count=1 -run '^TestRealUserServiceLifecycle$' -v ./internal/command
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: binaries-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
+      - name: Verify complete release and prepare Cask
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          TAP_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
+        run: |
+          test -n "$TAP_KEY" || { echo 'Configure HOMEBREW_TAP_SSH_KEY before tagging a release'; exit 1; }
+          cat dist/*.sha256 | sort -k2 > dist/checksums.txt
+          (cd dist && sha256sum -c checksums.txt)
+          python3 scripts/generate-cask.py "$RELEASE_TAG" dist/checksums.txt generated/rag-go.rb
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: Ownera1/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
+          path: tap
+          persist-credentials: true
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          prerelease=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "$RELEASE_TAG" dist/*.tar.gz dist/checksums.txt --verify-tag --draft --title "$RELEASE_TAG" --generate-notes "${prerelease[@]}"
+          mkdir downloaded
+          gh release download "$RELEASE_TAG" --dir downloaded --pattern '*.tar.gz' --pattern checksums.txt
+          (cd downloaded && sha256sum -c checksums.txt)
+          gh release edit "$RELEASE_TAG" --draft=false
+      - name: Update Homebrew Tap
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p tap/Casks
+          cp generated/rag-go.rb tap/Casks/rag-go.rb
+          git -C tap add Casks/rag-go.rb
+          git -C tap -c user.name='rag-go release' -c user.email='release@users.noreply.github.com' commit -m "Release rag-go $RELEASE_TAG"
+          git -C tap push

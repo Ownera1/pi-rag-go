@@ -59,13 +59,18 @@ func allowedFile(path string, size int64) bool {
 	return size < 500_000
 }
 
-func scan(ctx context.Context, root string, patterns []string) ([]string, error) {
+func scan(ctx context.Context, root string, patterns []string, ignoredRoots ...string) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	root, e := filepath.Abs(root)
 	if e != nil {
 		return nil, e
+	}
+	for _, ignored := range ignoredRoots {
+		if within(ignored, root) {
+			return nil, fmt.Errorf("store contents cannot be tracked: %s", root)
+		}
 	}
 	st, e := os.Stat(root)
 	if e != nil {
@@ -88,6 +93,14 @@ func scan(ctx context.Context, root string, patterns []string) ([]string, error)
 		}
 		if walkErr != nil {
 			return walkErr
+		}
+		for _, ignored := range ignoredRoots {
+			if within(ignored, p) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 		}
 		if p == root {
 			return nil
@@ -142,7 +155,7 @@ func (c *Core) Index(ctx context.Context, paths []string) (result IndexResult, e
 	if e := c.compatible(ctx, c.db); e != nil {
 		return IndexResult{}, e
 	}
-	result, accepted := c.indexInto(ctx, c.db, paths, false)
+	result, accepted, _ := c.indexInto(ctx, c.db, paths, false)
 	c.updateState(accepted, result.Failures)
 	if e := c.saveState(); e != nil {
 		return result, e
@@ -168,12 +181,12 @@ type work struct {
 	stage  string
 }
 
-func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, force bool) (IndexResult, []string) {
+func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, force bool) (IndexResult, []string, []string) {
 	result := IndexResult{Errors: []string{}, Failures: []model.FileFailure{}}
 	accepted := []string{}
 	all := map[string]bool{}
 	for _, root := range roots {
-		found, e := scan(ctx, root, c.cfg.ExcludePatterns)
+		found, e := scan(ctx, root, c.cfg.ExcludePatterns, c.root)
 		if e != nil {
 			addFailure(&result, root, "scan", e)
 			continue
@@ -189,14 +202,14 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
-	paths, e := document.CanonicalFiles(ctx, paths)
+	paths, e := c.prepare(ctx, paths, &result)
 	if e != nil {
 		addFailure(&result, strings.Join(roots, ", "), "scan", e)
-		return result, accepted
+		return result, accepted, paths
 	}
 	c.progressTotal(len(paths))
 	if len(paths) == 0 {
-		return result, accepted
+		return result, accepted, paths
 	}
 	jobs := make(chan string)
 	done := make(chan work, 32)
@@ -266,7 +279,7 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 	}()
 	for w := range done {
 		if w.err != nil {
-			addFailure(&result, w.path, w.stage, w.err)
+			addFailure(&result, c.sourceFor(w.path), w.stage, w.err)
 			c.progressResult(result, w.path)
 			continue
 		}
@@ -276,7 +289,7 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 			continue
 		}
 		if c.embedder == nil {
-			addFailure(&result, w.path, "embed", errors.New("embedding provider unavailable"))
+			addFailure(&result, c.sourceFor(w.path), "embed", errors.New("embedding provider unavailable"))
 			c.progressResult(result, w.path)
 			continue
 		}
@@ -302,7 +315,7 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 			e = db.Replace(ctx, w.doc, w.chunks, vectors)
 		}
 		if e != nil {
-			addFailure(&result, w.path, stage, e)
+			addFailure(&result, c.sourceFor(w.path), stage, e)
 			c.progressResult(result, w.path)
 			continue
 		}
@@ -310,7 +323,7 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 		result.Chunks += len(w.chunks)
 		c.progressResult(result, w.path)
 	}
-	return result, accepted
+	return result, accepted, paths
 }
 
 func (c *Core) Refresh(ctx context.Context) (result IndexResult, err error) {
@@ -330,7 +343,7 @@ func (c *Core) Refresh(ctx context.Context) (result IndexResult, err error) {
 	if e := c.compatible(ctx, c.db); e != nil {
 		return IndexResult{}, e
 	}
-	result, accepted := c.indexInto(ctx, c.db, c.tracked(), false)
+	result, accepted, snapshot := c.indexInto(ctx, c.db, c.tracked(), false)
 	c.updateState(accepted, result.Failures)
 	if e := c.saveState(); e != nil {
 		return result, e
@@ -341,26 +354,14 @@ func (c *Core) Refresh(ctx context.Context) (result IndexResult, err error) {
 	if result.Failed > 0 {
 		return result, nil
 	}
-	present := map[string]bool{}
+	// Recheck root accessibility before pruning; conversion is performed only once.
 	for _, root := range c.tracked() {
-		paths, e := scan(ctx, root, c.cfg.ExcludePatterns)
-		if e != nil {
+		if _, e := scan(ctx, root, c.cfg.ExcludePatterns, c.root); e != nil {
 			return result, e
 		}
-		for _, p := range paths {
-			present[p] = true
-		}
 	}
-	presentPaths := make([]string, 0, len(present))
-	for p := range present {
-		presentPaths = append(presentPaths, p)
-	}
-	canonical, e := document.CanonicalFiles(ctx, presentPaths)
-	if e != nil {
-		return result, e
-	}
-	present = map[string]bool{}
-	for _, p := range canonical {
+	present := map[string]bool{}
+	for _, p := range snapshot {
 		present[p] = true
 	}
 	indexed, e := c.db.List(ctx)
@@ -372,9 +373,12 @@ func (c *Core) Refresh(ctx context.Context) (result IndexResult, err error) {
 			if e = c.db.Delete(ctx, p); e != nil {
 				return result, e
 			}
+			c.stateMu.Lock()
+			delete(c.sourcePaths, p)
+			c.stateMu.Unlock()
 		}
 	}
-	return result, nil
+	return result, c.saveState()
 }
 
 func randomID() string {
@@ -468,7 +472,7 @@ func (c *Core) Rebuild(ctx context.Context) (result IndexResult, err error) {
 		}
 		_ = os.RemoveAll(stageDir)
 	}()
-	result, accepted := c.indexInto(ctx, db, c.tracked(), true)
+	result, accepted, _ := c.indexInto(ctx, db, c.tracked(), true)
 	c.updateState(accepted, result.Failures)
 	if e := c.saveState(); e != nil {
 		return result, e

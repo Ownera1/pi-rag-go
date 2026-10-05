@@ -66,6 +66,12 @@ func LoadConfig(path string) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if c.Runtime.AutoRefresh.DebounceMs < 0 || c.Runtime.AutoRefresh.RescanMs < 0 || c.Runtime.PDF.TimeoutMs < 0 {
+		return errors.New("runtime intervals cannot be negative")
+	}
+	if backend := c.Runtime.PDF.Backend; backend != "" && backend != "grobid" && backend != "pdftotext" && backend != "mineru" {
+		return errors.New("invalid PDF backend")
+	}
 	if c.Embedding.Type != "voyage" && c.Embedding.Type != "openai" {
 		return fmt.Errorf("unsupported embedding type %q", c.Embedding.Type)
 	}
