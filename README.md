@@ -7,7 +7,7 @@ Go RAG Core for a shared local knowledge store. It parses GROBID TEI, JATS XML, 
 Install precompiled macOS/Linux binaries for arm64 and amd64. On macOS, Homebrew installs all five commands:
 
 ```sh
-brew install --cask ownera1/tap/rag-go
+brew install --formula ownera1/tap/rag-go
 rag init
 rag service install
 rag connect claude
@@ -27,7 +27,9 @@ sh /tmp/rag-go-install.sh                    # latest stable release
 sh /tmp/rag-go-install.sh --version vX.Y.Z  # a specific published release
 ```
 
-It installs all five commands to `~/.local/bin`; add that directory to PATH. Upgrade with `brew upgrade --cask ownera1/tap/rag-go` or rerun the installer, then `rag service restart`. Uninstall the service with `rag service uninstall` before removing the binaries. The installer verifies checksums before replacing existing commands. Linux archives use glibc (built on Ubuntu 22.04); Alpine/musl and Windows packages are outside this release.
+It installs all five commands to `~/.local/bin`; add that directory to PATH. Upgrade with `brew upgrade --formula ownera1/tap/rag-go` or rerun the installer, then `rag service restart`. Uninstall the service with `rag service uninstall` before removing the binaries. The installer verifies checksums before replacing existing commands. Linux archives use glibc (built on Ubuntu 22.04); Alpine/musl and Windows packages are outside this release.
+
+The Homebrew Formula installs the precompiled CLI archive directly. These executables are ad-hoc signed, without Apple notarization; macOS quarantine can prevent the legacy Cask from running. If you installed the Cask, uninstall it first with `brew uninstall --cask ownera1/tap/rag-go`, then install the Formula above. The script installer is also supported.
 
 ## Initialize and configure
 
@@ -104,7 +106,7 @@ python3 scripts/test-release.py
 
 Native service acceptance is opt-in: set `RAG_TEST_BINARY` to an absolute built `rag` path and run `go test -tags sqlite_fts5 -count=1 -run '^TestRealUserServiceLifecycle$' -v ./internal/command`. On macOS also set `RAG_TEST_LAUNCHAGENT=1` from a GUI login session; the test uses a temporary plist and store, then unloads the job. On a disposable Linux user session set `RAG_TEST_SYSTEMD=1`; it temporarily installs a user unit, then removes it. Existing rag-go services are preserved by skipping this test. The release matrix runs the Linux test on both architectures.
 
-Tag-triggered releases build and test all four native platforms, verify downloaded release checksums, publish the release, then update the Homebrew Cask. Publication uses the repository's automatic `GITHUB_TOKEN`. Tap updates use a write-enabled SSH deploy key on `Ownera1/homebrew-tap`; its private key is the `HOMEBREW_TAP_SSH_KEY` Actions secret in this repository. The Tap must have an initial default-branch commit. Pull requests run archive smoke tests without publishing. Live provider quality, actual GROBID/MinerU extraction, login/reboot behavior, and Agent tool use require separate acceptance evidence from unit/protocol tests.
+Tag-triggered releases build and test all four native platforms, verify downloaded release checksums, publish the release, then update the precompiled Homebrew Formula and compatibility Cask. Publication uses the repository's automatic `GITHUB_TOKEN`. Tap updates use a write-enabled SSH deploy key on `Ownera1/homebrew-tap`; its private key is the `HOMEBREW_TAP_SSH_KEY` Actions secret in this repository. The Tap must have an initial default-branch commit. Pull requests run archive smoke tests without publishing. Live provider quality, actual GROBID/MinerU extraction, login/reboot behavior, and Agent tool use require separate acceptance evidence from unit/protocol tests.
 
 The MCP tools are `rag_query`, `rag_index`, `rag_status`, `rag_refresh`, `rag_list_documents`, `rag_rebuild`, `rag_clear`, `rag_cleanup`, and `rag_remove`. `rag_clear` requires `confirm=true`; the CLI equivalent is `bin/ragctl --confirm clear`. The clear operation publishes an empty generation and retains older generations and tracked paths.
 
