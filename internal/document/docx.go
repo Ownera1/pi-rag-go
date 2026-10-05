@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Ownera1/pi-rag-go/internal/model"
+	"github.com/Ownera1/rag-go/internal/model"
 )
 
 func wordNS(space string) bool {

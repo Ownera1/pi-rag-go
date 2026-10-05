@@ -13,7 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Ownera1/pi-rag-go/pkg/rag"
+	"github.com/Ownera1/rag-go/pkg/rag"
 )
 
 func TestHTTPClientCanCallStatus(t *testing.T) {

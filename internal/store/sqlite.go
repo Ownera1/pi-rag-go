@@ -19,8 +19,8 @@ import (
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/Ownera1/pi-rag-go/internal/model"
-	"github.com/Ownera1/pi-rag-go/internal/searchtext"
+	"github.com/Ownera1/rag-go/internal/model"
+	"github.com/Ownera1/rag-go/internal/searchtext"
 )
 
 var loadOnce sync.Once

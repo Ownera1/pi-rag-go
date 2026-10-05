@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Ownera1/pi-rag-go/internal/chunk"
-	"github.com/Ownera1/pi-rag-go/internal/model"
-	"github.com/Ownera1/pi-rag-go/internal/searchtext"
-	"github.com/Ownera1/pi-rag-go/internal/store"
+	"github.com/Ownera1/rag-go/internal/chunk"
+	"github.com/Ownera1/rag-go/internal/model"
+	"github.com/Ownera1/rag-go/internal/searchtext"
+	"github.com/Ownera1/rag-go/internal/store"
 )
 
 func quotedQuery(query string) string {

@@ -13,8 +13,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Ownera1/pi-rag-go/internal/evaluate"
-	"github.com/Ownera1/pi-rag-go/pkg/rag"
+	"github.com/Ownera1/rag-go/internal/evaluate"
+	"github.com/Ownera1/rag-go/pkg/rag"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

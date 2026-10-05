@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Ownera1/pi-rag-go/internal/mcpserver"
-	"github.com/Ownera1/pi-rag-go/pkg/rag"
+	"github.com/Ownera1/rag-go/internal/mcpserver"
+	"github.com/Ownera1/rag-go/pkg/rag"
 )
 
 func main() {

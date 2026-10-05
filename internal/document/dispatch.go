@@ -13,7 +13,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/Ownera1/pi-rag-go/internal/model"
+	"github.com/Ownera1/rag-go/internal/model"
 )
 
 const ParserVersion = "document-blocks-v3"

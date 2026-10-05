@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Ownera1/pi-rag-go/internal/document"
+	"github.com/Ownera1/rag-go/internal/document"
 )
 
 func sourceFile(t *testing.T, path string, data []byte) {

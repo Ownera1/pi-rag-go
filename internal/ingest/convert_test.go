@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Ownera1/pi-rag-go/internal/document"
+	"github.com/Ownera1/rag-go/internal/document"
 )
 
 const sampleTEI = `<TEI xmlns="http://www.tei-c.org/ns/1.0"><text><body><div><head>Methods</head><p coords="3,10,20,30,40">Signal evidence.</p></div></body></text></TEI>`

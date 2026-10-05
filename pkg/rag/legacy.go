@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Ownera1/pi-rag-go/internal/model"
+	"github.com/Ownera1/rag-go/internal/model"
 )
 
 // legacyProvider resolves the registry metadata used by the TypeScript

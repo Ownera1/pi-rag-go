@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Ownera1/pi-rag-go/internal/store"
+	"github.com/Ownera1/rag-go/internal/store"
 )
 
 var indexName = regexp.MustCompile(`^[0-9a-f]{10}-[0-9a-f]{10}$`)

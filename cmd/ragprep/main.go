@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Ownera1/pi-rag-go/internal/document"
-	"github.com/Ownera1/pi-rag-go/internal/ingest"
+	"github.com/Ownera1/rag-go/internal/document"
+	"github.com/Ownera1/rag-go/internal/ingest"
 )
 
 func main() {

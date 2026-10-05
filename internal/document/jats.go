@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/Ownera1/pi-rag-go/internal/model"
+	"github.com/Ownera1/rag-go/internal/model"
 )
 
 var excludedJATS = map[string]bool{"ref-list": true, "ack": true, "fn": true, "fn-group": true, "fig": true, "table-wrap": true, "table": true, "disp-formula": true, "inline-formula": true, "math": true, "supplementary-material": true}

@@ -1,4 +1,4 @@
-module github.com/Ownera1/pi-rag-go
+module github.com/Ownera1/rag-go
 
 go 1.25.0
 

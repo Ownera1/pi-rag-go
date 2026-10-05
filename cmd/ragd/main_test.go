@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Ownera1/pi-rag-go/pkg/rag"
+	"github.com/Ownera1/rag-go/pkg/rag"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

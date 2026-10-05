@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Ownera1/pi-rag-go/internal/model"
+	"github.com/Ownera1/rag-go/internal/model"
 )
 
 type savedState struct {

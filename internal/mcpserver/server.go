@@ -11,11 +11,11 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Ownera1/pi-rag-go/pkg/rag"
+	"github.com/Ownera1/rag-go/pkg/rag"
 )
 
 func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "pi-rag-go", Version: "0.1.0"}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "rag-go", Version: "0.1.0"}, nil)
 	if len(lifecycle) > 0 {
 		// Stateful MCP sessions detach tool contexts from the initiating HTTP
 		// request. Tie each call to the resident service's lifetime explicitly.
@@ -172,7 +172,7 @@ func Proxy(ctx context.Context, endpoint string) error {
 }
 
 func proxy(ctx context.Context, endpoint string, transport mcp.Transport) error {
-	client := mcp.NewClient(&mcp.Implementation{Name: "pi-rag-go-stdio", Version: "0.1.0"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "rag-go-stdio", Version: "0.1.0"}, nil)
 	remote, e := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint, DisableStandaloneSSE: true}, nil)
 	if e != nil {
 		return fmt.Errorf("connect to ragd: %w", e)
@@ -182,7 +182,7 @@ func proxy(ctx context.Context, endpoint string, transport mcp.Transport) error 
 	if e != nil {
 		return e
 	}
-	server := mcp.NewServer(&mcp.Implementation{Name: "pi-rag-go-stdio", Version: "0.1.0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "rag-go-stdio", Version: "0.1.0"}, nil)
 	for _, t := range tools.Tools {
 		tool := t
 		server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {

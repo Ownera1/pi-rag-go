@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Ownera1/pi-rag-go/internal/store"
+	"github.com/Ownera1/rag-go/internal/store"
 )
 
 func TestLegacyVoyageAliasAndEndpointFingerprint(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/Ownera1/pi-rag-go/internal/model"
+	"github.com/Ownera1/rag-go/internal/model"
 	"golang.org/x/net/html"
 )
 

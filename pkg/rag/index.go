@@ -16,10 +16,10 @@ import (
 
 	gitignore "github.com/sabhiram/go-gitignore"
 
-	"github.com/Ownera1/pi-rag-go/internal/chunk"
-	"github.com/Ownera1/pi-rag-go/internal/document"
-	"github.com/Ownera1/pi-rag-go/internal/model"
-	"github.com/Ownera1/pi-rag-go/internal/store"
+	"github.com/Ownera1/rag-go/internal/chunk"
+	"github.com/Ownera1/rag-go/internal/document"
+	"github.com/Ownera1/rag-go/internal/model"
+	"github.com/Ownera1/rag-go/internal/store"
 )
 
 var skipDirs = map[string]bool{

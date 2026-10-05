@@ -1,4 +1,4 @@
-# pi-rag-go
+# rag-go
 
 Go RAG Core for a shared local knowledge store. It parses GROBID TEI, JATS XML, Markdown, DOCX, HTML, MinerU results, plain text, and source/configuration files; indexes with SQLite FTS5 and sqlite-vec; and serves structured results over MCP. `ragprep` converts PDFs into canonical document packages independently of indexing. The existing TypeScript `XML_parse` implementation is the migration reference.
 

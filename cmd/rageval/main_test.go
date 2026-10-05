@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Ownera1/pi-rag-go/internal/evaluate"
-	"github.com/Ownera1/pi-rag-go/internal/mcpserver"
-	"github.com/Ownera1/pi-rag-go/pkg/rag"
+	"github.com/Ownera1/rag-go/internal/evaluate"
+	"github.com/Ownera1/rag-go/internal/mcpserver"
+	"github.com/Ownera1/rag-go/pkg/rag"
 )
 
 // This deterministic model only proves the evaluator's HTTP/MCP integration.

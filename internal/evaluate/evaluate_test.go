@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Ownera1/pi-rag-go/internal/model"
-	"github.com/Ownera1/pi-rag-go/pkg/rag"
+	"github.com/Ownera1/rag-go/internal/model"
+	"github.com/Ownera1/rag-go/pkg/rag"
 )
 
 func TestMetricsIncludeFailuresAndCountEachLabelOnce(t *testing.T) {
