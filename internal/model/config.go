@@ -17,7 +17,8 @@ func DefaultConfig() Config {
 			APIKeyEnv:  "VOYAGE_API_KEY",
 		},
 		Reranker:        ProviderConfig{Type: "none", Model: "none"},
-		Chunking:        ChunkingConfig{Mode: "semantic"},
+		Chunking:        DefaultChunking(),
+		Indexing:        IndexingConfig{Workers: 32, SemanticWorkers: 2, EmbeddingBatchSize: 64},
 		TrackedPaths:    []string{},
 		ExcludePatterns: []string{},
 		Alpha:           0.4,
@@ -26,6 +27,11 @@ func DefaultConfig() Config {
 		HTTPTimeoutMs:   30000,
 		HTTPMaxRetries:  3,
 	}
+}
+
+func DefaultChunking() ChunkingConfig {
+	return ChunkingConfig{Mode: "semantic", LegacyTarget: 180, LegacyMax: 240, LegacyOverlap: 30,
+		SemanticMin: 120, SemanticTarget: 280, SemanticMax: 420, SemanticUnitMax: 140}
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -46,9 +52,6 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if _, ok := fields["reranker"]; ok {
 		c.Reranker = ProviderConfig{}
-	}
-	if _, ok := fields["chunking"]; ok {
-		c.Chunking = ChunkingConfig{}
 	}
 	if err = json.Unmarshal(b, &c); err != nil {
 		return c, err
@@ -74,6 +77,17 @@ func (c Config) Validate() error {
 	}
 	if c.Chunking.Mode != "semantic" && c.Chunking.Mode != "legacy" {
 		return errors.New("chunking mode must be semantic or legacy")
+	}
+	b := c.Chunking
+	if b.LegacyTarget < 1 || b.LegacyMax < b.LegacyTarget || b.LegacyMax > 8192 ||
+		b.LegacyOverlap < 0 || b.LegacyOverlap >= b.LegacyTarget ||
+		b.SemanticMin < 1 || b.SemanticTarget < b.SemanticMin || b.SemanticMax < b.SemanticTarget ||
+		b.SemanticMax > 8192 || b.SemanticUnitMax < 1 || b.SemanticUnitMax > b.SemanticMax {
+		return errors.New("invalid chunking thresholds")
+	}
+	if c.Indexing.Workers < 1 || c.Indexing.Workers > 64 || c.Indexing.SemanticWorkers < 1 ||
+		c.Indexing.SemanticWorkers > c.Indexing.Workers || c.Indexing.EmbeddingBatchSize < 1 || c.Indexing.EmbeddingBatchSize > 256 {
+		return errors.New("invalid indexing concurrency or embedding batch size")
 	}
 	if c.Alpha < 0 || c.Alpha > 1 || c.TopK < 1 || c.CandidateTopK < c.TopK || c.CandidateTopK > 200 {
 		return errors.New("invalid retrieval limits or alpha")

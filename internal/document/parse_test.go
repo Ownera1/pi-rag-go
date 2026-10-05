@@ -53,3 +53,18 @@ func TestTEIInvalid(t *testing.T) {
 		}
 	}
 }
+
+func TestTEIMixedNamespaceExclusions(t *testing.T) {
+	x := `<TEI xmlns="http://www.tei-c.org/ns/1.0" xmlns:m="http://www.w3.org/1998/Math/MathML"><text><body><div><head>Method</head><p>before ` +
+		`<formula><m:math><m:mi>x</m:mi><m:mi>FORMULA_LEAK</m:mi></m:math></formula>` +
+		`<note><m:math><m:mi>x</m:mi><m:mi>NOTE_LEAK</m:mi></m:math></note> after.</p>` +
+		`<figure><m:math><m:mi>x</m:mi><m:mi>FIGURE_LEAK</m:mi></m:math><p>FIGURE_BODY</p></figure>` +
+		`<p>final evidence.</p></div></body></text></TEI>`
+	blocks, err := ParseTEI(context.Background(), []byte(x))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocks) != 1 || blocks[0].Text != "before after.\n\nfinal evidence." {
+		t.Fatalf("excluded subtrees leaked or removed body: %+v", blocks)
+	}
+}

@@ -14,14 +14,33 @@ import (
 	"github.com/Ownera1/pi-rag-go/pkg/rag"
 )
 
-func New(core *rag.Core) *mcp.Server {
+func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "pi-rag-go", Version: "0.1.0"}, nil)
+	if len(lifecycle) > 0 {
+		// Stateful MCP sessions detach tool contexts from the initiating HTTP
+		// request. Tie each call to the resident service's lifetime explicitly.
+		service := lifecycle[0]
+		s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+			return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
+				if err := service.Err(); err != nil {
+					return nil, err
+				}
+				ctx, cancel := context.WithCancel(ctx)
+				stop := context.AfterFunc(service, cancel)
+				defer stop()
+				defer cancel()
+				return next(ctx, method, request)
+			}
+		})
+	}
 	type queryIn struct {
 		Query         string   `json:"query"`
 		TopK          int      `json:"top_k,omitempty"`
 		CandidateTopK int      `json:"candidate_top_k,omitempty"`
 		Alpha         *float64 `json:"alpha,omitempty"`
 		Mode          string   `json:"mode,omitempty"`
+		DisableRerank bool     `json:"disable_rerank,omitempty"`
+		RequireRerank bool     `json:"require_rerank,omitempty"`
 	}
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -33,6 +52,8 @@ func New(core *rag.Core) *mcp.Server {
 			CandidateTopK: in.CandidateTopK,
 			Alpha:         in.Alpha,
 			Mode:          in.Mode,
+			DisableRerank: in.DisableRerank,
+			RequireRerank: in.RequireRerank,
 		})
 		return nil, r, e
 	})
@@ -103,6 +124,20 @@ func New(core *rag.Core) *mcp.Server {
 		e := core.Clear(ctx)
 		return nil, clearOut{e == nil}, e
 	})
+	type cleanupIn struct {
+		Keep    int  `json:"keep,omitempty"`
+		DryRun  bool `json:"dry_run,omitempty"`
+		Confirm bool `json:"confirm,omitempty"`
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "rag_cleanup", Description: "Preview or remove inactive Go index generations; active index is always retained; deletion requires confirm=true"},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in cleanupIn) (*mcp.CallToolResult, rag.CleanupResult, error) {
+			keep := in.Keep
+			if keep == 0 {
+				keep = 3
+			}
+			r, err := core.Cleanup(ctx, keep, in.DryRun || !in.Confirm)
+			return nil, r, err
+		})
 	return s
 }
 

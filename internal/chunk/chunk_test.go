@@ -59,3 +59,26 @@ func TestSemanticGapAndProvenance(t *testing.T) {
 		}
 	}
 }
+
+func TestConfiguredChunkLimitsAndSectionBoundaries(t *testing.T) {
+	cfg := model.DefaultConfig()
+	cfg.Chunking.SemanticMin, cfg.Chunking.SemanticTarget, cfg.Chunking.SemanticMax, cfg.Chunking.SemanticUnitMax = 8, 12, 16, 8
+	a, b := "A", "B"
+	blocks := []model.Block{{Text: strings.Repeat("甲", 40), Section: &a}, {Text: strings.Repeat("乙", 40), Section: &b}}
+	chunks, err := Semantic(context.Background(), blocks, fake{}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range chunks {
+		if Estimate(c.Content) > 16 || (strings.Contains(c.Content, "甲") && strings.Contains(c.Content, "乙")) {
+			t.Fatalf("limit or section crossed: %+v", c)
+		}
+	}
+	legacy := model.DefaultChunking()
+	legacy.LegacyTarget, legacy.LegacyMax, legacy.LegacyOverlap = 10, 15, 0
+	for _, c := range Legacy(blocks, legacy) {
+		if Estimate(c.Content) > 15 || (strings.Contains(c.Content, "甲") && strings.Contains(c.Content, "乙")) {
+			t.Fatalf("legacy boundary: %+v", c)
+		}
+	}
+}

@@ -10,10 +10,24 @@
     "type": "none",
     "model": "none"
   },
-  "chunking": { "mode": "semantic" },
+  "chunking": {
+    "mode": "semantic",
+    "legacyTarget": 180,
+    "legacyMax": 240,
+    "legacyOverlap": 30,
+    "semanticMin": 120,
+    "semanticTarget": 280,
+    "semanticMax": 420,
+    "semanticUnitMax": 140
+  },
   "alpha": 0.4,
   "topK": 5,
   "candidateTopK": 30,
   "httpTimeoutMs": 30000,
-  "httpMaxRetries": 3
+  "httpMaxRetries": 3,
+  "indexing": {
+    "workers": 32,
+    "semanticWorkers": 2,
+    "embeddingBatchSize": 64
+  }
 }

@@ -42,7 +42,7 @@ var allowed = map[string]bool{
 	".csv": true, ".tsv": true, ".sh": true, ".bash": true, ".zsh": true,
 	".fish": true, ".ps1": true, ".sql": true, ".graphql": true, ".gql": true,
 	".proto": true, ".env": true, ".gitignore": true, ".dockerfile": true, ".tf": true,
-	".hcl": true,
+	".hcl": true, ".docx": true, ".html": true, ".htm": true, ".nxml": true, ".pdf": true,
 }
 
 func allowedFile(path string, size int64) bool {
@@ -50,13 +50,19 @@ func allowedFile(path string, size int64) bool {
 	if !allowed[ext] {
 		return false
 	}
-	if strings.HasSuffix(strings.ToLower(path), ".tei.xml") {
-		return size < 10_000_000
+	if document.IsMinerUFile(path) || strings.HasSuffix(strings.ToLower(path), ".rag-blocks.json") ||
+		strings.HasSuffix(strings.ToLower(path), ".tei.xml") ||
+		ext == ".docx" || ext == ".html" || ext == ".htm" || ext == ".nxml" || ext == ".xml" ||
+		ext == ".md" || ext == ".mdx" || ext == ".pdf" {
+		return size <= document.MaxDocumentBytes
 	}
 	return size < 500_000
 }
 
-func scan(root string, patterns []string) ([]string, error) {
+func scan(ctx context.Context, root string, patterns []string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	root, e := filepath.Abs(root)
 	if e != nil {
 		return nil, e
@@ -77,6 +83,9 @@ func scan(root string, patterns []string) ([]string, error) {
 	ig := gitignore.CompileIgnoreLines(patterns...)
 	found := []string{}
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -113,41 +122,19 @@ func scan(root string, patterns []string) ([]string, error) {
 		return nil
 	})
 	sort.Strings(found)
-	return found, err
+	if err != nil {
+		return nil, err
+	}
+	return document.CanonicalFiles(ctx, found)
 }
 
-func (c *Core) loadState() {
-	b, e := os.ReadFile(filepath.Join(c.root, "state.json"))
-	if e == nil {
-		var s struct {
-			TrackedPaths []string `json:"trackedPaths"`
-		}
-		if json.Unmarshal(b, &s) == nil && s.TrackedPaths != nil {
-			c.cfg.TrackedPaths = s.TrackedPaths
-		}
-	}
-}
-
-func (c *Core) saveState() error {
-	b, e := json.MarshalIndent(struct {
-		TrackedPaths []string `json:"trackedPaths"`
-	}{c.cfg.TrackedPaths}, "", "  ")
-	if e != nil {
-		return e
-	}
-	path := filepath.Join(c.root, "state.json")
-	tmp := path + ".tmp"
-	if e = os.WriteFile(tmp, b, 0600); e != nil {
-		return e
-	}
-	return os.Rename(tmp, path)
-}
-
-func (c *Core) Index(ctx context.Context, paths []string) (IndexResult, error) {
+func (c *Core) Index(ctx context.Context, paths []string) (result IndexResult, err error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.legacy {
-		return IndexResult{}, errors.New("legacy store is read-only")
+	c.beginProgress("index")
+	defer func() { c.progressFailures(result.Failed); c.finishProgress(err) }()
+	if e := c.writable(); e != nil {
+		return IndexResult{}, e
 	}
 	if e := c.ensureDB(); e != nil {
 		return IndexResult{}, e
@@ -155,19 +142,12 @@ func (c *Core) Index(ctx context.Context, paths []string) (IndexResult, error) {
 	if e := c.compatible(ctx, c.db); e != nil {
 		return IndexResult{}, e
 	}
-	result := c.indexInto(ctx, c.db, paths, false)
-	if result.Failed == 0 {
-		for _, p := range paths {
-			abs, e := filepath.Abs(p)
-			if e == nil && !contains(c.cfg.TrackedPaths, abs) {
-				c.cfg.TrackedPaths = append(c.cfg.TrackedPaths, abs)
-			}
-		}
-		if e := c.saveState(); e != nil {
-			return result, e
-		}
+	result, accepted := c.indexInto(ctx, c.db, paths, false)
+	c.updateState(accepted, result.Failures)
+	if e := c.saveState(); e != nil {
+		return result, e
 	}
-	return result, nil
+	return result, ctx.Err()
 }
 
 func contains(xs []string, s string) bool {
@@ -185,18 +165,21 @@ type work struct {
 	skip   bool
 	err    error
 	path   string
+	stage  string
 }
 
-func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, force bool) IndexResult {
-	result := IndexResult{Errors: []string{}}
+func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, force bool) (IndexResult, []string) {
+	result := IndexResult{Errors: []string{}, Failures: []model.FileFailure{}}
+	accepted := []string{}
 	all := map[string]bool{}
 	for _, root := range roots {
-		found, e := scan(root, c.cfg.ExcludePatterns)
+		found, e := scan(ctx, root, c.cfg.ExcludePatterns)
 		if e != nil {
-			result.Failed++
-			result.Errors = append(result.Errors, e.Error())
+			addFailure(&result, root, "scan", e)
 			continue
 		}
+		abs, _ := filepath.Abs(root)
+		accepted = append(accepted, abs)
 		for _, p := range found {
 			all[p] = true
 		}
@@ -206,32 +189,38 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
+	paths, e := document.CanonicalFiles(ctx, paths)
+	if e != nil {
+		addFailure(&result, strings.Join(roots, ", "), "scan", e)
+		return result, accepted
+	}
+	c.progressTotal(len(paths))
 	if len(paths) == 0 {
-		return result
+		return result, accepted
 	}
 	jobs := make(chan string)
 	done := make(chan work, 32)
-	sem := make(chan struct{}, 2)
+	sem := make(chan struct{}, c.cfg.Indexing.SemanticWorkers)
 	var wg sync.WaitGroup
-	workers := min(32, len(paths))
+	workers := min(c.cfg.Indexing.Workers, len(paths))
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for p := range jobs {
 				if e := ctx.Err(); e != nil {
-					done <- work{path: p, err: e}
+					done <- work{path: p, stage: "parse", err: e}
 					continue
 				}
 				doc, e := document.Parse(ctx, p)
 				if e != nil {
-					done <- work{path: p, err: e}
+					done <- work{path: p, stage: "parse", err: e}
 					continue
 				}
 				if !force {
 					hash, embedded, err := db.FileHash(ctx, p)
 					if err != nil {
-						done <- work{path: p, err: err}
+						done <- work{path: p, stage: "store", err: err}
 						continue
 					}
 					if hash == doc.Hash && embedded {
@@ -240,26 +229,30 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 					}
 				}
 				semantic := c.cfg.Chunking.Mode == "semantic" &&
-					(doc.Format == "grobid-tei" ||
-						strings.HasSuffix(strings.ToLower(p), ".md") ||
-						strings.HasSuffix(strings.ToLower(p), ".mdx") ||
+					(doc.Format != "text" ||
+						filepath.Base(p) == "rag-source.json" ||
 						strings.HasSuffix(strings.ToLower(p), ".txt"))
 				var chunks []model.Chunk
 				if semantic {
-					sem <- struct{}{}
-					chunks, e = chunk.Semantic(ctx, doc.Blocks, c.embedder)
+					select {
+					case sem <- struct{}{}:
+					case <-ctx.Done():
+						done <- work{path: p, stage: "chunk", err: ctx.Err()}
+						continue
+					}
+					chunks, e = chunk.Semantic(ctx, doc.Blocks, c.embedder, c.cfg)
 					<-sem
-				} else if doc.Format == "grobid-tei" {
+				} else if doc.Format != "text" {
 					for _, b := range doc.Blocks {
-						for _, ch := range chunk.Legacy([]model.Block{b}) {
+						for _, ch := range chunk.Legacy([]model.Block{b}, c.cfg.Chunking) {
 							ch.ChunkIndex = len(chunks)
 							chunks = append(chunks, ch)
 						}
 					}
 				} else {
-					chunks = chunk.Legacy(doc.Blocks)
+					chunks = chunk.Legacy(doc.Blocks, c.cfg.Chunking)
 				}
-				done <- work{path: p, doc: doc, chunks: chunks, err: e}
+				done <- work{path: p, doc: doc, chunks: chunks, stage: "chunk", err: e}
 			}
 		}()
 	}
@@ -273,17 +266,18 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 	}()
 	for w := range done {
 		if w.err != nil {
-			result.Failed++
-			result.Errors = append(result.Errors, w.path+": "+w.err.Error())
+			addFailure(&result, w.path, w.stage, w.err)
+			c.progressResult(result, w.path)
 			continue
 		}
 		if w.skip {
 			result.Skipped++
+			c.progressResult(result, w.path)
 			continue
 		}
 		if c.embedder == nil {
-			result.Failed++
-			result.Errors = append(result.Errors, w.path+": embedding provider unavailable")
+			addFailure(&result, w.path, "embed", errors.New("embedding provider unavailable"))
+			c.progressResult(result, w.path)
 			continue
 		}
 		for i := range w.chunks {
@@ -291,33 +285,43 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 			w.chunks[i].Hash = document.ShortHash(w.chunks[i].Content)
 			w.chunks[i].Tokens = chunk.Estimate(w.chunks[i].Content)
 			w.chunks[i].Path = w.doc.Path
+			w.chunks[i].SourcePath = w.doc.SourcePath
+			w.chunks[i].Title = w.doc.Title
+			w.chunks[i].Format = w.doc.Format
+			w.chunks[i].ParserVersion = w.doc.ParserVersion
 		}
 		texts := make([]string, len(w.chunks))
 		for i, ch := range w.chunks {
 			texts[i] = ch.Content
 		}
+		c.progressFile(w.path, "embedding")
 		vectors, e := c.embedder.EmbedDocuments(ctx, texts)
+		stage := "embed"
 		if e == nil {
+			stage = "store"
 			e = db.Replace(ctx, w.doc, w.chunks, vectors)
 		}
 		if e != nil {
-			result.Failed++
-			result.Errors = append(result.Errors, w.path+": "+e.Error())
+			addFailure(&result, w.path, stage, e)
+			c.progressResult(result, w.path)
 			continue
 		}
 		result.Indexed++
 		result.Chunks += len(w.chunks)
+		c.progressResult(result, w.path)
 	}
-	return result
+	return result, accepted
 }
 
-func (c *Core) Refresh(ctx context.Context) (IndexResult, error) {
+func (c *Core) Refresh(ctx context.Context) (result IndexResult, err error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.legacy {
-		return IndexResult{}, errors.New("legacy store is read-only")
+	c.beginProgress("refresh")
+	defer func() { c.progressFailures(result.Failed); c.finishProgress(err) }()
+	if e := c.writable(); e != nil {
+		return IndexResult{}, e
 	}
-	if len(c.cfg.TrackedPaths) == 0 {
+	if len(c.tracked()) == 0 {
 		return IndexResult{Errors: []string{}}, nil
 	}
 	if e := c.ensureDB(); e != nil {
@@ -326,19 +330,38 @@ func (c *Core) Refresh(ctx context.Context) (IndexResult, error) {
 	if e := c.compatible(ctx, c.db); e != nil {
 		return IndexResult{}, e
 	}
-	result := c.indexInto(ctx, c.db, c.cfg.TrackedPaths, false)
+	result, accepted := c.indexInto(ctx, c.db, c.tracked(), false)
+	c.updateState(accepted, result.Failures)
+	if e := c.saveState(); e != nil {
+		return result, e
+	}
+	if e := ctx.Err(); e != nil {
+		return result, e
+	}
 	if result.Failed > 0 {
 		return result, nil
 	}
 	present := map[string]bool{}
-	for _, root := range c.cfg.TrackedPaths {
-		paths, e := scan(root, c.cfg.ExcludePatterns)
+	for _, root := range c.tracked() {
+		paths, e := scan(ctx, root, c.cfg.ExcludePatterns)
 		if e != nil {
 			return result, e
 		}
 		for _, p := range paths {
 			present[p] = true
 		}
+	}
+	presentPaths := make([]string, 0, len(present))
+	for p := range present {
+		presentPaths = append(presentPaths, p)
+	}
+	canonical, e := document.CanonicalFiles(ctx, presentPaths)
+	if e != nil {
+		return result, e
+	}
+	present = map[string]bool{}
+	for _, p := range canonical {
+		present[p] = true
 	}
 	indexed, e := c.db.List(ctx)
 	if e != nil {
@@ -422,13 +445,15 @@ func (c *Core) publish(ctx context.Context, stage *store.DB, stageDir string) er
 	return nil
 }
 
-func (c *Core) Rebuild(ctx context.Context) (IndexResult, error) {
+func (c *Core) Rebuild(ctx context.Context) (result IndexResult, err error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.legacy {
-		return IndexResult{}, errors.New("legacy store is read-only")
+	c.beginProgress("rebuild")
+	defer func() { c.progressFailures(result.Failed); c.finishProgress(err) }()
+	if e := c.writable(); e != nil {
+		return IndexResult{}, e
 	}
-	if len(c.cfg.TrackedPaths) == 0 {
+	if len(c.tracked()) == 0 {
 		return IndexResult{}, errors.New("no tracked paths to rebuild")
 	}
 	stageDir := filepath.Join(c.root, "staging", randomID())
@@ -443,7 +468,11 @@ func (c *Core) Rebuild(ctx context.Context) (IndexResult, error) {
 		}
 		_ = os.RemoveAll(stageDir)
 	}()
-	result := c.indexInto(ctx, db, c.cfg.TrackedPaths, true)
+	result, accepted := c.indexInto(ctx, db, c.tracked(), true)
+	c.updateState(accepted, result.Failures)
+	if e := c.saveState(); e != nil {
+		return result, e
+	}
 	if result.Failed > 0 {
 		return result, errors.New("rebuild failed; active index preserved")
 	}
@@ -460,8 +489,8 @@ func (c *Core) Rebuild(ctx context.Context) (IndexResult, error) {
 func (c *Core) Clear(ctx context.Context) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.legacy {
-		return errors.New("legacy store is read-only")
+	if e := c.writable(); e != nil {
+		return e
 	}
 	stageDir := filepath.Join(c.root, "staging", randomID())
 	db, e := store.Open(filepath.Join(stageDir, "rag.db"), false, c.cfg.Embedding.Dimensions)
@@ -469,5 +498,6 @@ func (c *Core) Clear(ctx context.Context) error {
 		return e
 	}
 	defer os.RemoveAll(stageDir)
+	defer db.Close()
 	return c.publish(ctx, db, stageDir)
 }

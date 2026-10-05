@@ -34,12 +34,27 @@ func TestHTTPClientCanCallStatus(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(tools.Tools) != 7 {
+	if len(tools.Tools) != 8 {
 		t.Fatalf("got %d tools", len(tools.Tools))
 	}
 	result, e := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "rag_status", Arguments: map[string]any{}})
 	if e != nil || result.IsError || result.StructuredContent == nil {
 		t.Fatalf("status: %+v %v", result, e)
+	}
+	for _, args := range []map[string]any{{}, {"dry_run": true, "confirm": true}, {"confirm": true}} {
+		result, e := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "rag_cleanup", Arguments: args})
+		if e != nil || result.IsError {
+			t.Fatalf("cleanup: %+v %v", result, e)
+		}
+		b, _ := json.Marshal(result.StructuredContent)
+		var output rag.CleanupResult
+		if e = json.Unmarshal(b, &output); e != nil {
+			t.Fatal(e)
+		}
+		wantPreview := args["confirm"] != true || args["dry_run"] == true
+		if output.DryRun != wantPreview {
+			t.Fatalf("cleanup preview: %+v, args=%+v", output, args)
+		}
 	}
 }
 
@@ -119,7 +134,7 @@ func TestProxyForwardsRemoteTools(t *testing.T) {
 	}
 	defer session.Close()
 	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 7 {
+	if err != nil || len(tools.Tools) != 8 {
 		t.Fatalf("proxy tools=%+v err=%v", tools, err)
 	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "rag_status", Arguments: map[string]any{}})

@@ -20,6 +20,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/Ownera1/pi-rag-go/internal/model"
+	"github.com/Ownera1/pi-rag-go/internal/searchtext"
 )
 
 var loadOnce sync.Once
@@ -104,6 +105,10 @@ CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
     INSERT INTO chunks_fts(rowid, chunk_content, file_path)
     VALUES(new.rowid, new.chunk_content, new.file_path);
 END;
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_cjk USING fts5(search_text);
+CREATE TRIGGER IF NOT EXISTS chunks_cjk_ad AFTER DELETE ON chunks BEGIN
+    DELETE FROM chunks_cjk WHERE rowid=old.rowid;
+END;
 CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
     DELETE FROM chunks_fts WHERE rowid=old.rowid;
 END;
@@ -119,6 +124,13 @@ CREATE TABLE IF NOT EXISTS files (
     title TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_file_path ON chunks(file_path);
+CREATE TABLE IF NOT EXISTS chunk_sources (
+    chunk_id TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+    source_path TEXT NOT NULL,
+    title TEXT NOT NULL,
+    format TEXT NOT NULL,
+    parser_version TEXT NOT NULL
+);
 `, dim)
 	_, err := d.SQL.Exec(schema)
 	return err
@@ -236,7 +248,15 @@ INSERT INTO chunks (
 		if err != nil {
 			return err
 		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO chunks_cjk(rowid,search_text) VALUES(?,?)", rowid, searchtext.Indexed(c.Content+" "+doc.Path)); err != nil {
+			return err
+		}
 		if _, err = tx.ExecContext(ctx, "INSERT INTO chunks_vec(rowid,embedding) VALUES(CAST(? AS INTEGER),?)", rowid, vecBytes(vectors[i])); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO chunk_sources
+            (chunk_id, source_path, title, format, parser_version) VALUES (?, ?, ?, ?, ?)`,
+			c.ID, doc.SourcePath, doc.Title, doc.Format, doc.ParserVersion); err != nil {
 			return err
 		}
 	}
@@ -251,7 +271,7 @@ ON CONFLICT(path) DO UPDATE SET
     embedded=1,
     document_id=excluded.document_id,
     title=excluded.title`,
-		doc.Path, doc.Hash, len(chunks), now, doc.Size, doc.Hash, filepath.Base(doc.Path),
+		doc.Path, doc.Hash, len(chunks), now, doc.Size, doc.ID, doc.Title,
 	); e != nil {
 		return e
 	}
@@ -318,6 +338,23 @@ func (d *DB) FTS(ctx context.Context, query string, limit int) ([]Match, error) 
 	return out, rows.Err()
 }
 
+func (d *DB) FTSHan(ctx context.Context, query string, limit int) ([]Match, error) {
+	rows, err := d.SQL.QueryContext(ctx, "SELECT rowid,bm25(chunks_cjk) FROM chunks_cjk WHERE chunks_cjk MATCH ? ORDER BY bm25(chunks_cjk) LIMIT ?", query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Match{}
+	for rows.Next() {
+		var m Match
+		if err = rows.Scan(&m.RowID, &m.Score); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) Vectors(ctx context.Context, vector []float32, limit int) ([]Match, error) {
 	rows, e := d.SQL.QueryContext(ctx, "SELECT rowid,distance FROM chunks_vec WHERE embedding MATCH ? LIMIT ?", vecBytes(vector), limit)
 	if e != nil {
@@ -346,10 +383,15 @@ func (d *DB) Chunks(ctx context.Context, ids []int64) (map[int64]model.Chunk, er
 		args[i] = id
 		placeholders[i] = "?"
 	}
-	q := `SELECT
-    rowid, id, file_path, chunk_content, line_start, line_end, chunk_hash,
-    indexed_at, tokens, page_start, page_end, section, chunk_index
-FROM chunks WHERE rowid IN (` + strings.Join(placeholders, ",") + `)`
+	columns := `chunks.rowid, chunks.id, file_path, chunk_content, line_start, line_end,
+        chunk_hash, indexed_at, tokens, page_start, page_end, section, chunk_index`
+	join := ""
+	if !d.ReadOnly {
+		columns += `, COALESCE(source_path,''), COALESCE(title,''),
+            COALESCE(format,''), COALESCE(parser_version,'')`
+		join = " LEFT JOIN chunk_sources ON chunk_sources.chunk_id=chunks.id"
+	}
+	q := "SELECT " + columns + " FROM chunks" + join + " WHERE chunks.rowid IN (" + strings.Join(placeholders, ",") + ")"
 	rows, e := d.SQL.QueryContext(ctx, q, args...)
 	if e != nil {
 		return nil, e
@@ -361,10 +403,14 @@ FROM chunks WHERE rowid IN (` + strings.Join(placeholders, ",") + `)`
 		var indexed string
 		var pageA, pageB sql.NullInt64
 		var sec sql.NullString
-		if e = rows.Scan(
+		dest := []any{
 			&id, &c.ID, &c.Path, &c.Content, &c.LineStart, &c.LineEnd, &c.Hash,
 			&indexed, &c.Tokens, &pageA, &pageB, &sec, &c.ChunkIndex,
-		); e != nil {
+		}
+		if !d.ReadOnly {
+			dest = append(dest, &c.SourcePath, &c.Title, &c.Format, &c.ParserVersion)
+		}
+		if e = rows.Scan(dest...); e != nil {
 			return nil, e
 		}
 		if pageA.Valid {
