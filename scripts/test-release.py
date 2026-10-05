@@ -27,6 +27,16 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             cask.generate("v1.2.3", checksums.splitlines()[0])
 
+    def test_formula_requires_complete_native_archives(self):
+        checksums = "\n".join(f"{'b' * 64}  rag-go_v1.2.3_{os_name}_{arch}.tar.gz"
+                              for os_name in ("darwin", "linux") for arch in ("arm64", "amd64"))
+        rendered = cask.generate_formula("v1.2.3", checksums)
+        self.assertEqual(rendered.count('      url "'), 4)
+        self.assertIn('bin.install "rag", "ragd", "ragctl", "ragprep", "rageval"', rendered)
+        self.assertNotIn('depends_on "go"', rendered)
+        with self.assertRaises(KeyError):
+            cask.generate_formula("v1.2.3", checksums.splitlines()[0])
+
     def test_installer_checks_checksum_and_preserves_existing_installation(self):
         with tempfile.TemporaryDirectory(prefix="rag-installer-") as scratch:
             base = Path(scratch)

@@ -107,6 +107,7 @@ jobs:
           cat dist/*.sha256 | sort -k2 > dist/checksums.txt
           (cd dist && sha256sum -c checksums.txt)
           python3 scripts/generate-cask.py "$RELEASE_TAG" dist/checksums.txt generated/rag-go.rb
+          python3 scripts/generate-cask.py --formula "$RELEASE_TAG" dist/checksums.txt generated/rag-go-formula.rb
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: Ownera1/homebrew-tap
@@ -130,8 +131,9 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          mkdir -p tap/Casks
+          mkdir -p tap/Casks tap/Formula
           cp generated/rag-go.rb tap/Casks/rag-go.rb
-          git -C tap add Casks/rag-go.rb
+          cp generated/rag-go-formula.rb tap/Formula/rag-go.rb
+          git -C tap add Casks/rag-go.rb Formula/rag-go.rb
           git -C tap -c user.name='rag-go release' -c user.email='release@users.noreply.github.com' commit -m "Release rag-go $RELEASE_TAG"
           git -C tap push
