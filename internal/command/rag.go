@@ -76,6 +76,12 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 	if cmd == "eval" {
 		return Evaluate(append([]string{"--endpoint", endpoint}, rest...), out)
 	}
+	if cmd == "connect" {
+		return Connect(ctx, rest, endpoint, out, errout)
+	}
+	if cmd == "service" {
+		return Service(ctx, rest, store, out, errout)
+	}
 	if cmd == "add" {
 		cmd = "index"
 	}
