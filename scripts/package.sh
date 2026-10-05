@@ -12,12 +12,12 @@ commit=$(git rev-parse --short HEAD)
 platform=$(go env GOOS)
 architecture=$(go env GOARCH)
 export CGO_ENABLED=1
-for binary in rag ragd ragctl ragprep rageval; do
+for binary in rag; do
   go build -trimpath -tags sqlite_fts5 -ldflags "-s -w -X github.com/Ownera1/rag-go/internal/command.Version=$version -X github.com/Ownera1/rag-go/internal/command.Commit=$commit" -o "$stage/$binary" "./cmd/$binary"
 done
 cp LICENSE README.md "$stage/"
 archive="rag-go_${version}_${platform}_${architecture}.tar.gz"
-tar -czf "$output/$archive" -C "$stage" rag ragd ragctl ragprep rageval LICENSE README.md
+tar -czf "$output/$archive" -C "$stage" rag LICENSE README.md
 if command -v sha256sum >/dev/null 2>&1; then
   (cd "$output" && sha256sum "$archive") > "$output/$archive.sha256"
 else

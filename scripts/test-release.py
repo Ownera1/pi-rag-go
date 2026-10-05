@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate Cask completeness and installer verification without network access."""
+"""Validate Formula completeness and installer verification without network access."""
 import hashlib
 import importlib.util
 import io
@@ -12,31 +12,22 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-spec = importlib.util.spec_from_file_location("cask", ROOT / "scripts/generate-cask.py")
-cask = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(cask)
+spec = importlib.util.spec_from_file_location("formula", ROOT / "scripts/generate-formula.py")
+formula = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(formula)
 
 
 class ReleaseTests(unittest.TestCase):
-    def test_cask_requires_all_four_archives(self):
-        checksums = "\n".join(f"{'a' * 64}  rag-go_v1.2.3_{os_name}_{arch}.tar.gz"
-                              for os_name in ("darwin", "linux") for arch in ("arm64", "amd64"))
-        rendered = cask.generate("v1.2.3", checksums)
-        self.assertIn('version "1.2.3"', rendered)
-        self.assertEqual(rendered.count('  binary "'), 5)
-        with self.assertRaises(KeyError):
-            cask.generate("v1.2.3", checksums.splitlines()[0])
-
     def test_formula_requires_complete_native_archives(self):
         checksums = "\n".join(f"{'b' * 64}  rag-go_v1.2.3_{os_name}_{arch}.tar.gz"
                               for os_name in ("darwin", "linux") for arch in ("arm64", "amd64"))
-        rendered = cask.generate_formula("v1.2.3", checksums)
+        rendered = formula.generate_formula("v1.2.3", checksums)
         self.assertEqual(rendered.count('      url "'), 4)
         self.assertEqual(rendered.count('?package=formula"'), 4)
-        self.assertIn('bin.install "rag", "ragd", "ragctl", "ragprep", "rageval"', rendered)
+        self.assertIn('bin.install "rag"', rendered)
         self.assertNotIn('depends_on "go"', rendered)
         with self.assertRaises(KeyError):
-            cask.generate_formula("v1.2.3", checksums.splitlines()[0])
+            formula.generate_formula("v1.2.3", checksums.splitlines()[0])
 
     def test_installer_checks_checksum_and_preserves_existing_installation(self):
         with tempfile.TemporaryDirectory(prefix="rag-installer-") as scratch:
@@ -47,7 +38,7 @@ class ReleaseTests(unittest.TestCase):
             arch = "arm64" if platform.machine() in ("arm64", "aarch64") else "amd64"
             archive = f"rag-go_v1.2.3_{os_name}_{arch}.tar.gz"
             with tarfile.open(mirror / archive, "w:gz") as bundle:
-                for name in ("rag", "ragd", "ragctl", "ragprep", "rageval"):
+                for name in ("rag",):
                     content = b"#!/bin/sh\necho fixture\n"
                     info = tarfile.TarInfo(name); info.size = len(content); info.mode = 0o755
                     bundle.addfile(info, io.BytesIO(content))

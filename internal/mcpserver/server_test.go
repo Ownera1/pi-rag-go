@@ -7,144 +7,153 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
+	"sort"
 	"testing"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-
+	"github.com/Ownera1/rag-go/internal/workspace"
 	"github.com/Ownera1/rag-go/pkg/rag"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func TestHTTPClientCanCallStatus(t *testing.T) {
-	core, e := rag.Open(rag.Options{StoreDir: t.TempDir()})
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer core.Close()
-	server := httptest.NewServer(Handler(New(core)))
-	defer server.Close()
-	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
-	session, e := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: server.URL, DisableStandaloneSSE: true}, nil)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer session.Close()
-	tools, e := session.ListTools(context.Background(), nil)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if len(tools.Tools) != 9 {
-		t.Fatalf("got %d tools", len(tools.Tools))
-	}
-	result, e := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "rag_status", Arguments: map[string]any{}})
-	if e != nil || result.IsError || result.StructuredContent == nil {
-		t.Fatalf("status: %+v %v", result, e)
-	}
-	for _, args := range []map[string]any{{}, {"dry_run": true, "confirm": true}, {"confirm": true}} {
-		result, e := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "rag_cleanup", Arguments: args})
-		if e != nil || result.IsError {
-			t.Fatalf("cleanup: %+v %v", result, e)
-		}
-		b, _ := json.Marshal(result.StructuredContent)
-		var output rag.CleanupResult
-		if e = json.Unmarshal(b, &output); e != nil {
-			t.Fatal(e)
-		}
-		wantPreview := args["confirm"] != true || args["dry_run"] == true
-		if output.DryRun != wantPreview {
-			t.Fatalf("cleanup preview: %+v, args=%+v", output, args)
-		}
-	}
-}
-
-func TestHTTPIndexAndQueryWithModelService(t *testing.T) {
-	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var input struct {
-			Input []string `json:"input"`
-		}
-		if e := json.NewDecoder(r.Body).Decode(&input); e != nil {
-			t.Error(e)
-		}
-		items := make([]map[string]any, len(input.Input))
-		for i := range items {
-			items[i] = map[string]any{"index": i, "embedding": []float32{1, 0}}
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": items})
-	}))
-	defer modelServer.Close()
-	root := t.TempDir()
-	sources := t.TempDir()
-	path := filepath.Join(sources, "source.tei.xml")
-	xml := `<TEI xmlns="http://www.tei-c.org/ns/1.0"><text><body><div><head>Method</head>` +
-		`<p>channel evidence for shared agents</p></div></body></text></TEI>`
-	if e := os.WriteFile(path, []byte(xml), 0600); e != nil {
-		t.Fatal(e)
+func testCore(t *testing.T, root string, readOnly bool) *rag.Core {
+	t.Helper()
+	dir := workspace.Store(root)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
 	}
 	cfg := rag.DefaultConfig()
-	cfg.Embedding = rag.ProviderConfig{Type: "openai", Model: "fake", Dimensions: 2, BaseURL: modelServer.URL}
-	b, _ := json.Marshal(cfg)
-	if e := os.WriteFile(filepath.Join(root, "config.json"), b, 0600); e != nil {
-		t.Fatal(e)
+	cfg.Documents = "documents"
+	if err := workspace.AtomicJSON(filepath.Join(dir, "config.json"), cfg); err != nil {
+		t.Fatal(err)
 	}
-	core, e := rag.Open(rag.Options{StoreDir: root})
-	if e != nil {
-		t.Fatal(e)
+	if err := os.WriteFile(filepath.Join(dir, ".lock"), nil, 0600); err != nil {
+		t.Fatal(err)
 	}
-	defer core.Close()
-	server := httptest.NewServer(Handler(New(core)))
-	defer server.Close()
-	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
-	session, e := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: server.URL, DisableStandaloneSSE: true}, nil)
-	if e != nil {
-		t.Fatal(e)
+	if err := os.MkdirAll(filepath.Join(root, "documents"), 0700); err != nil {
+		t.Fatal(err)
 	}
-	defer session.Close()
-	indexed, e := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "rag_index", Arguments: map[string]any{"paths": []string{sources}}})
-	if e != nil || indexed.IsError {
-		t.Fatalf("index: %+v %v", indexed, e)
-	}
-	queried, e := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "rag_query", Arguments: map[string]any{"query": "channel evidence"}})
-	if e != nil || queried.IsError {
-		t.Fatalf("query: %s %v", queried.Content[0].(*mcp.TextContent).Text, e)
-	}
-	raw, _ := json.Marshal(queried.StructuredContent)
-	if !strings.Contains(string(raw), "channel evidence for shared agents") {
-		t.Fatalf("missing source: %s", raw)
-	}
-}
-
-func TestProxyForwardsRemoteTools(t *testing.T) {
-	core, err := rag.Open(rag.Options{StoreDir: t.TempDir()})
+	core, err := rag.Open(rag.Options{WorkspaceDir: root, ReadOnly: readOnly})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.Close()
-	remote := httptest.NewServer(Handler(New(core)))
-	defer remote.Close()
+	t.Cleanup(func() { core.Close() })
+	return core
+}
+func checkTools(t *testing.T, ctx context.Context, session *mcp.ClientSession, readOnly bool) {
+	t.Helper()
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{}
+	for _, tool := range tools.Tools {
+		names = append(names, tool.Name)
+		if tool.Name == "rag_query" && (tool.Annotations == nil || tool.Annotations.ReadOnlyHint != readOnly) {
+			t.Fatal("wrong query read-only annotation")
+		}
+	}
+	sort.Strings(names)
+	want := []string{"rag_list_documents", "rag_query", "rag_status"}
+	if !readOnly {
+		want = append(want, "rag_rebuild", "rag_sync")
+		sort.Strings(want)
+	}
+	raw, _ := json.Marshal(names)
+	expected, _ := json.Marshal(want)
+	if string(raw) != string(expected) {
+		t.Fatalf("tools %s != %s", raw, expected)
+	}
+	for _, tool := range []string{"rag_status", "rag_list_documents"} {
+		r, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: map[string]any{}})
+		if err != nil || r.IsError || r.StructuredContent == nil {
+			t.Fatalf("%s: %+v %v", tool, r, err)
+		}
+	}
+	if readOnly {
+		for _, tool := range []string{"rag_sync", "rag_rebuild", "rag_index", "rag_clear", "rag_cleanup"} {
+			r, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: map[string]any{"confirm": true}})
+			if err == nil && !r.IsError {
+				t.Fatal("readonly allowed " + tool)
+			}
+		}
+	}
+}
+func TestHTTPReadOnlyToolBoundaryAndNoSync(t *testing.T) {
+	root := t.TempDir()
+	core := testCore(t, root, true)
+	if err := os.WriteFile(filepath.Join(root, "documents", "new.txt"), []byte("pending evidence"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(Handler(New(core)))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: server.URL, DisableStandaloneSSE: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	checkTools(t, ctx, session, true)
+	r, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "rag_query", Arguments: map[string]any{"query": "pending", "mode": "bm25"}})
+	if err != nil || r.IsError {
+		t.Fatalf("readonly query: %+v %v", r, err)
+	}
+	if _, err = os.Stat(filepath.Join(workspace.Store(root), "rag.db")); !os.IsNotExist(err) {
+		t.Fatal("readonly query created DB")
+	}
+	status, err := core.Status(ctx)
+	if err != nil || status.Files != 0 || !status.NeedsSync {
+		t.Fatalf("readonly status: %+v %v", status, err)
+	}
+}
+func TestLocalMCPToolsAndCancellation(t *testing.T) {
+	core := testCore(t, t.TempDir(), false)
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- proxy(ctx, remote.URL, serverTransport) }()
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-proxy", Version: "1"}, nil)
+	go func() { done <- New(core, ctx).Run(ctx, serverTransport) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
 	session, err := client.Connect(ctx, clientTransport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer session.Close()
-	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 9 {
-		t.Fatalf("proxy tools=%+v err=%v", tools, err)
+	checkTools(t, ctx, session, false)
+	if err := os.WriteFile(filepath.Join(core.WorkspaceDir(), "documents", "invalid.txt"), []byte{0, 1}, 0600); err != nil {
+		t.Fatal(err)
 	}
-	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "rag_status", Arguments: map[string]any{}})
-	if err != nil || result.IsError || result.StructuredContent == nil {
-		t.Fatalf("proxy status=%+v err=%v", result, err)
+	r, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "rag_sync", Arguments: map[string]any{}})
+	if err != nil || !r.IsError || r.StructuredContent == nil {
+		t.Fatalf("missing partial failure report: %+v %v", r, err)
+	}
+	b, err := json.Marshal(r.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report rag.IndexResult
+	if err = json.Unmarshal(b, &report); err != nil || report.Failed != 1 || len(report.Failures) != 1 {
+		t.Fatalf("failure report: %s %v", b, err)
 	}
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("proxy did not stop")
+		t.Fatal("MCP shutdown blocked")
+	}
+}
+func TestHTTPHostOriginBoundary(t *testing.T) {
+	handler := Handler(New(testCore(t, t.TempDir(), true)))
+	for _, c := range []struct{ host, origin string }{{"attacker.example", ""}, {"8.8.8.8:7331", ""}, {"127.0.0.1:7331", "https://attacker.example"}} {
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/mcp", nil)
+		r.Host = c.host
+		r.Header.Set("Origin", c.origin)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("host/origin accepted: %+v %d", c, w.Code)
+		}
 	}
 }

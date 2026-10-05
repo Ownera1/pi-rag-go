@@ -1,134 +1,187 @@
 #!/usr/bin/env python3
-"""Exercise installed binaries with a deterministic local embedding provider."""
+"""Exercise extracted rag with CLI, stdio MCP, HTTP MCP and a local model stub."""
 import argparse
 import json
-import os
-import socket
-import shutil
+import select
 import subprocess
 import tempfile
 import threading
-import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
 class Provider(BaseHTTPRequestHandler):
+    calls = 0
+
     def log_message(self, *args):
         pass
 
     def do_POST(self):
         data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        inputs = data["input"]
-        if isinstance(inputs, str):
-            inputs = [inputs]
-        result = {"data": [{"index": i, "embedding": [1.0, 0.0]} for i in range(len(inputs))]}
+        if self.path.endswith("/rerank"):
+            result = {"results": [{"index": i, "relevance_score": 1.0 - i / 100}
+                                  for i in range(min(len(data["documents"]), data["top_n"]))]}
+        else:
+            Provider.calls += 1
+            inputs = data["input"]
+            result = {"data": [{"index": i, "embedding": [1.0, 0.0]} for i in range(len(inputs))]}
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(json.dumps(result).encode())
 
 
-def pdf_fixture(text: str) -> bytes:
-    stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET\n"
-    objects = ["<< /Type /Catalog /Pages 2 0 R >>",
-               "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-               "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-               "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-               f"<< /Length {len(stream)} >>\nstream\n{stream}endstream"]
-    data = bytearray(b"%PDF-1.4\n")
-    offsets = [0]
-    for i, obj in enumerate(objects, 1):
-        offsets.append(len(data))
-        data.extend(f"{i} 0 obj\n{obj}\nendobj\n".encode())
-    xref = len(data)
-    data.extend(f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode())
-    for offset in offsets[1:]:
-        data.extend(f"{offset:010d} 00000 n \n".encode())
-    data.extend(f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
-    return bytes(data)
+def stop(process):
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
 
 
-def smoke(binaries: Path, persistent: Path | None = None):
-    binaries = binaries.resolve()
+def stdio_call(process, identifier, method, params, expect_error=False):
+    process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": identifier,
+                                   "method": method, "params": params}) + "\n")
+    process.stdin.flush()
+    if not select.select([process.stdout], [], [], 15)[0]:
+        raise TimeoutError(method)
+    response = json.loads(process.stdout.readline())
+    assert response["id"] == identifier, response
+    if expect_error:
+        assert response.get("error") or response.get("result", {}).get("isError"), response
+        return response
+    assert "error" not in response, response
+    return response["result"]
+
+
+def check_stdio(binary, root, readonly):
+    args = [str(binary), "mcp", "--workspace", str(root)]
+    if readonly:
+        args.append("--read-only")
+    process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True)
+    try:
+        stdio_call(process, 1, "initialize", {"protocolVersion": "2025-03-26",
+                   "capabilities": {}, "clientInfo": {"name": "release-smoke", "version": "1"}})
+        process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+        process.stdin.flush()
+        tools = stdio_call(process, 2, "tools/list", {})["tools"]
+        names = sorted(tool["name"] for tool in tools)
+        expected = ["rag_list_documents", "rag_query", "rag_status"]
+        if not readonly:
+            expected += ["rag_sync", "rag_rebuild"]
+        assert names == sorted(expected), names
+        query_tool = next(t for t in tools if t["name"] == "rag_query")
+        assert query_tool.get("annotations", {}).get("readOnlyHint", False) == readonly
+        result = stdio_call(process, 3, "tools/call", {"name": "rag_query",
+                             "arguments": {"query": "pendingmarker", "mode": "bm25"}})
+        assert not result.get("isError"), result
+        structured = result["structuredContent"]
+        assert bool(structured["hits"]) == (not readonly), structured
+        if readonly:
+            stdio_call(process, 4, "tools/call", {"name": "rag_sync", "arguments": {}}, expect_error=True)
+    finally:
+        stop(process)
+
+
+def http_call(url, identifier, method, params, session=None):
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    if session:
+        headers["Mcp-Session-Id"] = session
+        headers["MCP-Protocol-Version"] = "2025-03-26"
+    body = json.dumps({"jsonrpc": "2.0", "id": identifier, "method": method, "params": params}).encode()
+    with urllib.request.urlopen(urllib.request.Request(url, body, headers), timeout=15) as response:
+        raw = response.read().decode()
+        if raw.startswith("event:") or raw.startswith("data:"):
+            raw = next(line[6:] for line in raw.splitlines() if line.startswith("data: "))
+        result = json.loads(raw)
+        return result.get("result"), response.headers.get("Mcp-Session-Id", session), result.get("error")
+
+
+def smoke(binaries):
+    binary = binaries.resolve() / "rag"
     provider = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     threading.Thread(target=provider.serve_forever, daemon=True).start()
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    with tempfile.TemporaryDirectory(prefix="rag-release-") as scratch:
-        base = persistent or Path(scratch)
-        base.mkdir(parents=True, exist_ok=True)
-        store, source = base / "store", base / "papers"
-        source.mkdir(exist_ok=True)
-        store.mkdir(exist_ok=True)
-        config = {
-            "embedding": {"type": "openai", "model": "smoke", "dimensions": 2,
-                          "baseUrl": f"http://127.0.0.1:{provider.server_port}", "apiKeyEnv": ""},
-            "chunking": {"mode": "legacy"},
-            "runtime": {"listen": f"127.0.0.1:{port}", "autoRefresh": {
-                "enabled": True, "debounceMs": 100, "rescanMs": 500}},
-        }
-        converter = shutil.which("pdftotext")
-        if not converter:
-            raise RuntimeError("Poppler is required for the release PDF acceptance test")
-        config["runtime"]["pdf"] = {"backend": "pdftotext", "command": converter, "timeoutMs": 10000}
-        (store / "config.json").write_text(json.dumps(config))
-        log = open(base / "daemon.log", "w")
-        process = subprocess.Popen([str(binaries / "rag"), "serve", "--store", str(store)], stdout=log, stderr=log)
-        def cli(*args, legacy=False):
-            command = [str(binaries / ("ragctl" if legacy else "rag"))]
-            if legacy:
-                command += ["--endpoint", f"http://127.0.0.1:{port}/mcp", *args]
-            else:
-                command += [*args, "--store", str(store)]
-            return json.loads(subprocess.check_output(command, stderr=subprocess.PIPE, timeout=20))
-        def wait(condition):
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                if process.poll() is not None:
-                    raise RuntimeError("daemon exited: " + (base / "daemon.log").read_text())
-                try:
-                    if condition():
-                        return
-                except subprocess.CalledProcessError:
-                    pass
-                time.sleep(0.1)
-            raise RuntimeError("smoke condition did not settle")
-        try:
-            wait(lambda: cli("status")["storeDir"] == str(store))
-            first = source / "first.txt"
-            first.write_text("release smoke channel estimation evidence")
-            assert cli("add", str(source))["failed"] == 0
-            assert cli("query", "channel estimation", "--mode", "bm25")["hits"]
-            assert cli("query", "channel estimation", "--mode", "vector")["hits"]
-            assert cli("status", legacy=True)["files"] == 1
-            pdf = source / "automatic.pdf"
-            pdf.write_bytes(pdf_fixture("publication provenance distinctive evidence"))
-            wait(lambda: cli("status")["files"] == 2)
-            hits = cli("query", "publication provenance", "--mode", "bm25")["hits"]
-            assert hits and hits[0]["chunk"]["sourcePath"] == str(pdf)
-            assert hits[0]["chunk"]["pageStart"] == 1
-            pdf.unlink()
-            wait(lambda: cli("status")["files"] == 1)
-            second = source / "second.txt"
-            second.write_text("automatic update unique evidence")
-            wait(lambda: cli("status")["files"] == 2)
-            second.unlink()
-            wait(lambda: cli("status")["files"] == 1)
-            assert cli("remove", str(source))["removedDocuments"] == 1
-            assert cli("status")["files"] == 0
-            assert first.exists()
-            print("Release smoke passed: FTS5, sqlite-vec, legacy CLI, automatic real PDF conversion/provenance/deletion, watcher add/delete, remove.")
-        finally:
-            process.terminate()
+    try:
+        with tempfile.TemporaryDirectory(prefix="rag-release-") as scratch:
+            root = Path(scratch) / "workspace with spaces"
+            base_url = f"http://127.0.0.1:{provider.server_port}"
+
+            def cli(*args):
+                result = subprocess.run([str(binary), *args, "--workspace", str(root)],
+                                        check=True, capture_output=True, text=True, timeout=30)
+                return json.loads(result.stdout)
+
+            cli("init", "--embedding-type", "openai", "--model", "smoke",
+                "--dimensions", "2", "--base-url", base_url, "--api-key-env=")
+            config_path = root / ".rag-go/config.json"
+            config = json.loads(config_path.read_text())
+            config["chunking"]["mode"] = "legacy"
+            config["reranker"] = {"type": "http", "model": "smoke", "baseUrl": base_url}
+            config_path.write_text(json.dumps(config))
+            docs = root / "documents"
+            (docs / "first.txt").write_text("release channel estimation evidence")
+            assert cli("sync")["indexed"] == 1
+            count = Provider.calls
+            assert cli("sync")["skipped"] == 1 and Provider.calls == count
+            for mode in ("bm25", "vector", "hybrid"):
+                result = cli("query", "channel estimation", "--mode", mode)
+                assert result["hits"] and result["freshness"] == "fresh", result
+            (docs / "second.txt").write_text("pendingmarker evidence")
+            before = Provider.calls
+            check_stdio(binary, root, True)
+            assert Provider.calls == before
+            check_stdio(binary, root, False)
+            assert cli("status")["files"] == 2
+            paper = docs / "paper"
+            paper.mkdir()
+            (paper / "paper_content_list.json").write_text(json.dumps([
+                {"type": "text", "text": "provenance evidence", "page_idx": 4}]))
+            (paper / "full.md").write_text("duplicate_leak evidence")
+            result = cli("query", "provenance", "--mode", "bm25")
+            assert result["hits"][0]["chunk"]["pageStart"] == 5
+            assert not cli("query", "duplicate_leak", "--mode", "bm25")["hits"]
+            (docs / "second.txt").unlink()
+            assert cli("sync")["removed"] == 1
+            # HTTP always enforces read-only, including an explicit false stdio flag.
+            (docs / "http-pending.txt").write_text("httppending evidence")
+            process = subprocess.Popen([str(binary), "mcp", "--transport", "http", "--read-only=false",
+                                       "--workspace", str(root)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-            log.close()
-            provider.shutdown()
+                assert select.select([process.stderr], [], [], 10)[0], "HTTP startup timeout"
+                line = process.stderr.readline().strip()
+                url = line.split("MCP: ", 1)[1]
+                _, session, error = http_call(url, 1, "initialize", {"protocolVersion": "2025-03-26",
+                    "capabilities": {}, "clientInfo": {"name": "http-smoke", "version": "1"}})
+                assert not error
+                tools, _, error = http_call(url, 2, "tools/list", {}, session)
+                assert not error and sorted(t["name"] for t in tools["tools"]) == ["rag_list_documents", "rag_query", "rag_status"]
+                result, _, error = http_call(url, 3, "tools/call", {"name": "rag_query",
+                    "arguments": {"query": "httppending", "mode": "bm25"}}, session)
+                assert not error and not result.get("isError") and not result["structuredContent"]["hits"]
+                assert cli("status")["files"] == 2
+                result, _, error = http_call(url, 4, "tools/call", {"name": "rag_rebuild", "arguments": {}}, session)
+                assert error or result.get("isError")
+            finally:
+                stop(process)
+                assert not process.stdout.read(), "HTTP diagnostics leaked to stdout"
+            cli("sync")
+            for _ in range(3):
+                assert cli("rebuild")["failed"] == 0
+            assert cli("clean", "--keep", "1")["dryRun"]
+            assert len(cli("clean", "--keep", "1", "--confirm")["removed"]) == 2
+            dataset = root / "questions.jsonl"
+            dataset.write_text(json.dumps({"id": "one", "query": "channel estimation",
+                               "relevant": [{"pathSuffix": "first.txt", "contains": "channel estimation"}]}) + "\n")
+            report = cli("eval", "--dataset", str(dataset), "--modes", "bm25,vector,hybrid,rerank")
+            assert all(s["failed"] == 0 and s["recallAtK"] == 1 for s in report["summaries"])
+            print("Release smoke passed: standalone CLI, auto sync, FTS5/sqlite-vec, provenance, stdio MCP, read-only HTTP, rebuild/clean, four-mode evaluation.")
+    finally:
+        provider.shutdown()
+        provider.server_close()
 
 
 if __name__ == "__main__":

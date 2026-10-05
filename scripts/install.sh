@@ -36,19 +36,19 @@ fi
 [ "$expected" = "$actual" ] || { echo 'Checksum mismatch; installation aborted' >&2; exit 1; }
 tar -tzf "$scratch/$archive" > "$scratch/contents"
 while IFS= read -r entry; do
-  case "$entry" in rag|ragd|ragctl|ragprep|rageval|LICENSE|README.md) ;; *) echo 'Unexpected archive entry' >&2; exit 1;; esac
+  case "$entry" in rag|LICENSE|README.md) ;; *) echo 'Unexpected archive entry' >&2; exit 1;; esac
 done < "$scratch/contents"
 mkdir "$scratch/stage"
 tar -xzf "$scratch/$archive" -C "$scratch/stage"
-for binary in rag ragd ragctl ragprep rageval; do
+for binary in rag; do
   [ -f "$scratch/stage/$binary" ] && [ ! -L "$scratch/stage/$binary" ] || { echo "Missing binary: $binary" >&2; exit 1; }
 done
 mkdir -p "$prefix"
-for binary in rag ragd ragctl ragprep rageval; do
+for binary in rag; do
   destination=$(mktemp "$prefix/.${binary}.XXXXXX")
   cp "$scratch/stage/$binary" "$destination"
   chmod 755 "$destination"
   mv -f "$destination" "$prefix/$binary"
 done
 printf 'Installed %s to %s. Add this directory to PATH and run rag init.\n' "$version" "$prefix"
-printf 'For an existing service, run rag service restart after upgrading.\n'
+printf 'Run rag init inside each workspace, then rag connect claude or rag connect codex.\n'

@@ -1,4 +1,5 @@
 {
+  "documents": "documents",
   "embedding": {
     "type": "voyage",
     "model": "voyage-4-lite",

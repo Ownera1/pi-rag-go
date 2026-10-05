@@ -39,15 +39,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: '1.25.x'
-      - name: Install real PDF extractor
-        shell: bash
-        run: |
-          if [[ "$RUNNER_OS" == Linux ]]; then
-            sudo apt-get update -qq
-            sudo apt-get install -y poppler-utils
-          else
-            brew list poppler >/dev/null 2>&1 || brew install poppler
-          fi
       - name: Check and test
         shell: bash
         run: |
@@ -69,15 +60,6 @@ jobs:
           tar -xzf "dist/rag-go_${version}_${{ matrix.platform }}_${{ matrix.arch }}.tar.gz" -C extracted
           python3 scripts/smoke-release.py extracted
           python3 scripts/test-release.py
-      - name: Exercise real Linux user service
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          sudo loginctl enable-linger "$(id -un)"
-          sudo systemctl start "user@$(id -u).service"
-          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-          RAG_TEST_SYSTEMD=1 RAG_TEST_BINARY="$PWD/extracted/rag" go test -tags sqlite_fts5 -count=1 -run '^TestRealUserServiceLifecycle$' -v ./internal/command
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: binaries-${{ matrix.platform }}-${{ matrix.arch }}
@@ -98,7 +80,7 @@ jobs:
           pattern: binaries-*
           merge-multiple: true
           path: dist
-      - name: Verify complete release and prepare Cask
+      - name: Verify complete release and prepare Formula
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           TAP_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
@@ -106,8 +88,7 @@ jobs:
           test -n "$TAP_KEY" || { echo 'Configure HOMEBREW_TAP_SSH_KEY before tagging a release'; exit 1; }
           cat dist/*.sha256 | sort -k2 > dist/checksums.txt
           (cd dist && sha256sum -c checksums.txt)
-          python3 scripts/generate-cask.py "$RELEASE_TAG" dist/checksums.txt generated/rag-go.rb
-          python3 scripts/generate-cask.py --formula "$RELEASE_TAG" dist/checksums.txt generated/rag-go-formula.rb
+          python3 scripts/generate-formula.py "$RELEASE_TAG" dist/checksums.txt generated/rag-go-formula.rb
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: Ownera1/homebrew-tap
@@ -131,9 +112,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          mkdir -p tap/Casks tap/Formula
-          cp generated/rag-go.rb tap/Casks/rag-go.rb
+          mkdir -p tap/Formula
           cp generated/rag-go-formula.rb tap/Formula/rag-go.rb
-          git -C tap add Casks/rag-go.rb Formula/rag-go.rb
+          git -C tap add Formula/rag-go.rb
           git -C tap -c user.name='rag-go release' -c user.email='release@users.noreply.github.com' commit -m "Release rag-go $RELEASE_TAG"
           git -C tap push

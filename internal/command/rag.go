@@ -2,13 +2,17 @@ package command
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/Ownera1/rag-go/pkg/rag"
 )
 
-// ReorderFlags permits options after positional arguments, preserving -- as a literal boundary.
+// ReorderFlags accepts options before or after positional arguments.
 func ReorderFlags(args []string, booleans map[string]bool) []string {
 	flags, positionals := []string{}, []string{}
 	for i := 0; i < len(args); i++ {
@@ -50,9 +54,8 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		prefix := append([]string{}, args[:i]...)
 		args = append([]string{args[i]}, append(prefix, args[i+1:]...)...)
 	}
-
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "usage: rag init|serve|stdio|add|index|remove|query|status|refresh|rebuild|list|clear|cleanup|connect|service|prep|eval|version [options]")
+		fmt.Fprintln(out, "usage: rag init|sync|query|status|rebuild|clean|connect|mcp|eval|version [--workspace PATH] [options]")
 		return nil
 	}
 	cmd, rest := args[0], args[1:]
@@ -63,74 +66,63 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 	if cmd == "init" {
 		return Initialize(ctx, rest, in, out, errout)
 	}
-	if cmd == "prep" {
-		return Prep(ctx, rest, out, errout)
+	if cmd == "connect" {
+		return Connect(ctx, rest, out, errout)
 	}
-	booleans := map[string]bool{"no-rerank": true, "confirm": true, "dry-run": true, "legacy-readonly": true, "h": true, "help": true, "replace": true}
-	rest = ReorderFlags(rest, booleans)
-	// --store is a facade option; older clients still use --endpoint directly.
-	store := DefaultStore()
-	filtered := []string{}
-	for i := 0; i < len(rest); i++ {
-		if rest[i] == "--" {
-			filtered = append(filtered, rest[i:]...)
-			break
-		}
-		if rest[i] == "--store" {
-			if i+1 == len(rest) {
-				return errors.New("--store requires a value")
-			}
-			i++
-			store = rest[i]
-		} else if strings.HasPrefix(rest[i], "--store=") {
-			store = strings.TrimPrefix(rest[i], "--store=")
-		} else {
-			filtered = append(filtered, rest[i])
-		}
+	if cmd == "mcp" {
+		return MCP(ctx, rest, errout)
 	}
-	rest = filtered
-	if cmd == "stdio" {
-		endpoint, e := endpointFor(store)
-		if e != nil {
-			return e
-		}
-		rest = append([]string{"--endpoint", endpoint}, rest...)
+	if cmd == "eval" {
+		return Evaluate(ctx, rest, out, errout)
 	}
-	if cmd == "serve" || cmd == "stdio" {
-		return Serve(ctx, append([]string{cmd, "--store", store}, rest...), errout)
+	if cmd != "sync" && cmd != "query" && cmd != "status" && cmd != "rebuild" && cmd != "clean" {
+		return fmt.Errorf("unknown command %q; see rag --help and the v0.2 migration guide", cmd)
 	}
-	endpoint, err := endpointFor(store)
+	fs := flag.NewFlagSet("rag "+cmd, flag.ContinueOnError)
+	fs.SetOutput(errout)
+	root := fs.String("workspace", "", "explicit workspace root")
+	opts := rag.QueryOptions{}
+	keep, confirm, dryRun := 3, false, false
+	if cmd == "query" {
+		fs.StringVar(&opts.Mode, "mode", "hybrid", "hybrid, vector or bm25")
+		fs.IntVar(&opts.TopK, "top-k", 0, "returned hits")
+		fs.IntVar(&opts.CandidateTopK, "candidate-top-k", 0, "rerank candidate count")
+		fs.BoolVar(&opts.DisableRerank, "no-rerank", false, "disable rerank")
+		fs.BoolVar(&opts.DisableSync, "no-sync", false, "query the existing index without synchronization")
+	}
+	if cmd == "clean" {
+		fs.IntVar(&keep, "keep", 3, "total generations to retain")
+		fs.BoolVar(&confirm, "confirm", false, "permit generation deletion")
+		fs.BoolVar(&dryRun, "dry-run", false, "force a preview")
+	}
+	if err := fs.Parse(ReorderFlags(rest, map[string]bool{"no-sync": true, "no-rerank": true, "confirm": true, "dry-run": true, "help": true, "h": true})); err != nil {
+		return err
+	}
+	if cmd != "query" && fs.NArg() != 0 {
+		return errors.New("unexpected positional arguments")
+	}
+	core, err := rag.Open(rag.Options{WorkspaceDir: *root})
 	if err != nil {
 		return err
 	}
-	if cmd == "eval" {
-		return Evaluate(append([]string{"--endpoint", endpoint}, rest...), out)
+	defer core.Close()
+	var result any
+	switch cmd {
+	case "sync":
+		result, err = core.Sync(ctx)
+	case "query":
+		result, err = core.Query(ctx, strings.Join(fs.Args(), " "), opts)
+	case "status":
+		result, err = core.Status(ctx)
+	case "rebuild":
+		result, err = core.Rebuild(ctx)
+	case "clean":
+		result, err = core.Cleanup(ctx, keep, dryRun || !confirm)
 	}
-	if cmd == "connect" {
-		return Connect(ctx, rest, endpoint, out, errout)
-	}
-	if cmd == "service" {
-		return Service(ctx, rest, store, out, errout)
-	}
-	if cmd == "add" {
-		cmd = "index"
-	}
-	rest = ReorderFlags(rest, booleans)
-	// All control options precede the legacy positional command.
-	boundary := 0
-	for boundary < len(rest) && strings.HasPrefix(rest[boundary], "-") && rest[boundary] != "--" {
-		a := rest[boundary]
-		boundary++
-		name := strings.TrimLeft(strings.SplitN(a, "=", 2)[0], "-")
-		if !strings.Contains(a, "=") && !booleans[name] && boundary < len(rest) {
-			boundary++
+	if result != nil {
+		if e := json.NewEncoder(out).Encode(result); e != nil {
+			return e
 		}
 	}
-	ctl := append([]string{"--endpoint", endpoint}, rest[:boundary]...)
-	ctl = append(ctl, cmd)
-	if boundary < len(rest) && rest[boundary] == "--" {
-		boundary++
-	}
-	ctl = append(ctl, rest[boundary:]...)
-	return Control(ctx, ctl, out, errout)
+	return err
 }

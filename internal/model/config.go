@@ -1,9 +1,11 @@
 package model
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -19,7 +21,7 @@ func DefaultConfig() Config {
 		Reranker:        ProviderConfig{Type: "none", Model: "none"},
 		Chunking:        DefaultChunking(),
 		Indexing:        IndexingConfig{Workers: 32, SemanticWorkers: 2, EmbeddingBatchSize: 64},
-		TrackedPaths:    []string{},
+		Documents:       "documents",
 		ExcludePatterns: []string{},
 		Alpha:           0.4,
 		CandidateTopK:   30,
@@ -47,14 +49,22 @@ func LoadConfig(path string) (Config, error) {
 	if err = json.Unmarshal(b, &fields); err != nil {
 		return c, err
 	}
+	if fields == nil {
+		return c, errors.New("configuration must be a JSON object")
+	}
 	if _, ok := fields["embedding"]; ok {
 		c.Embedding = ProviderConfig{}
 	}
 	if _, ok := fields["reranker"]; ok {
 		c.Reranker = ProviderConfig{}
 	}
-	if err = json.Unmarshal(b, &c); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err = dec.Decode(&c); err != nil {
 		return c, err
+	}
+	if err = dec.Decode(new(any)); err != io.EOF {
+		return c, errors.New("trailing configuration JSON")
 	}
 	if c.Embedding.Type == "voyage" && c.Embedding.BaseURL == "" {
 		c.Embedding.BaseURL = "https://api.voyageai.com/v1"
@@ -66,11 +76,8 @@ func LoadConfig(path string) (Config, error) {
 }
 
 func (c Config) Validate() error {
-	if c.Runtime.AutoRefresh.DebounceMs < 0 || c.Runtime.AutoRefresh.RescanMs < 0 || c.Runtime.PDF.TimeoutMs < 0 {
-		return errors.New("runtime intervals cannot be negative")
-	}
-	if backend := c.Runtime.PDF.Backend; backend != "" && backend != "grobid" && backend != "pdftotext" && backend != "mineru" {
-		return errors.New("invalid PDF backend")
+	if c.Documents == "" {
+		return errors.New("documents directory is required")
 	}
 	if c.Embedding.Type != "voyage" && c.Embedding.Type != "openai" {
 		return fmt.Errorf("unsupported embedding type %q", c.Embedding.Type)

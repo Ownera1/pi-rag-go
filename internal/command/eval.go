@@ -8,14 +8,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/Ownera1/rag-go/internal/evaluate"
 	"github.com/Ownera1/rag-go/pkg/rag"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func rate(value string) (*float64, error) {
@@ -26,16 +24,17 @@ func rate(value string) (*float64, error) {
 	return &v, err
 }
 
-func Evaluate(args []string, stdout io.Writer) error {
-	flags := flag.NewFlagSet("rageval", flag.ContinueOnError)
-	endpoint := flags.String("endpoint", "http://127.0.0.1:7331/mcp", "ragd MCP URL")
+func Evaluate(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("rag eval", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("workspace", "", "workspace root")
 	dataset := flags.String("dataset", "", "annotated JSONL evaluation dataset")
 	modes := flags.String("modes", "bm25,vector,hybrid", "comma-separated modes; add rerank when a reranker is configured")
 	topK := flags.Int("top-k", 5, "retrieval evaluation cutoff")
 	output := flags.String("output", "", "optional JSON report path")
 	embRate := flags.String("embedding-usd-per-million-tokens", "", "optional rate for estimated embedding cost")
 	rerankRate := flags.String("rerank-usd-per-million-tokens", "", "optional rate for estimated rerank cost")
-	if err := flags.Parse(args); err != nil {
+	if err := flags.Parse(ReorderFlags(args, map[string]bool{"h": true, "help": true})); err != nil {
 		return err
 	}
 	if *dataset == "" {
@@ -58,37 +57,21 @@ func Evaluate(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-	client := mcp.NewClient(&mcp.Implementation{Name: "rageval", Version: "0.2.0"}, nil)
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: *endpoint, DisableStandaloneSSE: true}, nil)
+	core, err := rag.Open(rag.Options{WorkspaceDir: *root, ReadOnly: true})
 	if err != nil {
 		return err
 	}
-	defer session.Close()
+	defer core.Close()
+	status, err := core.Status(ctx)
+	if err != nil {
+		return err
+	}
+	if status.NeedsSync || status.NeedsRebuild {
+		return errors.New("evaluation requires a synchronized compatible index; run rag sync or rag rebuild")
+	}
 	query := func(ctx context.Context, text string, options rag.QueryOptions) (rag.QueryResult, error) {
-		response, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "rag_query", Arguments: map[string]any{
-			"query": text, "top_k": options.TopK, "candidate_top_k": options.CandidateTopK, "mode": options.Mode,
-			"disable_rerank": options.DisableRerank, "require_rerank": options.RequireRerank,
-		}})
-		if err != nil {
-			return rag.QueryResult{}, err
-		}
-		if response.IsError {
-			for _, content := range response.Content {
-				if text, ok := content.(*mcp.TextContent); ok {
-					return rag.QueryResult{}, errors.New(text.Text)
-				}
-			}
-			return rag.QueryResult{}, errors.New("query tool failed")
-		}
-		b, err := json.Marshal(response.StructuredContent)
-		if err != nil {
-			return rag.QueryResult{}, err
-		}
-		var result rag.QueryResult
-		err = json.Unmarshal(b, &result)
-		return result, err
+		options.DisableSync = true
+		return core.Query(ctx, text, options)
 	}
 	selected := strings.Split(*modes, ",")
 	for i := range selected {
@@ -107,7 +90,7 @@ func Evaluate(args []string, stdout io.Writer) error {
 		if err = os.MkdirAll(filepath.Dir(*output), 0700); err != nil {
 			return err
 		}
-		f, err := os.CreateTemp(filepath.Dir(*output), ".rageval-*.json")
+		f, err := os.CreateTemp(filepath.Dir(*output), ".rag-eval-*.json")
 		if err != nil {
 			return err
 		}

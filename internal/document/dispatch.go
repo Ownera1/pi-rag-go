@@ -44,6 +44,35 @@ func readFile(path string) ([]byte, error) {
 	return b, nil
 }
 
+// InputFingerprint hashes exactly the bytes Parse consumes, without parsing body
+// structure. Manifest metadata and canonical content both participate.
+func InputFingerprint(ctx context.Context, path string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	b, err := readFile(path)
+	if err != nil {
+		return "", err
+	}
+	hash := ShortHash(string(b))
+	if filepath.Base(path) != "rag-source.json" {
+		return hash, ctx.Err()
+	}
+	var m Manifest
+	if err = json.Unmarshal(b, &m); err != nil {
+		return hash, err
+	}
+	content, err := localContent(filepath.Dir(path), m.ContentPath)
+	if err != nil {
+		return hash, err
+	}
+	data, err := readFile(content)
+	if err != nil {
+		return hash, err
+	}
+	return ShortHash(string(b) + "\x00" + string(data)), ctx.Err()
+}
+
 func Parse(ctx context.Context, path string) (model.Document, error) {
 	if err := ctx.Err(); err != nil {
 		return model.Document{}, err
@@ -199,7 +228,7 @@ func parseBytes(ctx context.Context, path string, b []byte, format string) ([]mo
 		}
 		return data.Blocks, nil
 	case "pdf":
-		return nil, errors.New("PDF requires preprocessing: run ragprep convert with grobid, mineru or pdftotext")
+		return nil, errors.New("PDF is not an indexable document; convert it to Markdown or structured JSON with an external tool")
 	case "text":
 		if !utf8.Valid(b) || bytes.IndexByte(b, 0) >= 0 {
 			return nil, errors.New("input is not UTF-8 text")

@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.2.0 (unreleased)
+
+- Workspace-scoped `.rag-go` configuration and indexes, one documents root, direct Core CLI and stdio MCP.
+- Query-triggered incremental synchronization with explicit freshness, persisted failures and a 60-second retry cooldown.
+- Operation-scoped cross-process reader/writer locks, transactional canonical replacement and atomic rebuild publication.
+- Three-tool read-only stdio/HTTP boundary; local MCP also exposes sync and rebuild.
+- Project-scoped Claude/Codex registrations and direct workspace credential injection.
+- Preserved structured parsers, source pages, Chinese BM25, vector/hybrid/rerank and evaluation.
+- Removed PDF conversion, background service/watchers, global store/path registration, TypeScript legacy mode and compatibility binaries.
+- Native archives, installer and Homebrew Formula now install only `rag`. See [migration](MIGRATION.md).
+
 ## v0.1.0
 
 The first release provides a local knowledge service with one command, automatic source updates and precompiled installation.

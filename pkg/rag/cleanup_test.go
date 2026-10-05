@@ -14,11 +14,11 @@ func TestCleanupPreviewRetainsActiveAndUnknownFiles(t *testing.T) {
 	dir := filepath.Join(root, "store")
 	c := openTest(t, dir, fakeEmbedding{})
 	defer c.Close()
-	file := filepath.Join(root, "source.txt")
+	file := docPath(c, "source.txt")
 	if err := os.WriteFile(file, []byte("stable evidence"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if r, e := c.Index(ctx, []string{file}); e != nil || r.Failed > 0 {
+	if r, e := c.Sync(ctx); e != nil || r.Failed > 0 {
 		t.Fatalf("index: %+v %v", r, e)
 	}
 	generations := []string{}
@@ -47,7 +47,7 @@ func TestCleanupPreviewRetainsActiveAndUnknownFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	active := s.ActiveDB
-	unknown := filepath.Join(dir, "indexes", "0000000000-0000000000", "1-0000000000000000")
+	unknown := filepath.Join(dir, ".rag-go", "indexes", "0000000000-0000000000", "1-0000000000000000")
 	if err = os.MkdirAll(unknown, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestCleanupPreviewRetainsActiveAndUnknownFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := t.TempDir()
-	if err = os.Symlink(out, filepath.Join(dir, "indexes", "linked")); err != nil {
+	if err = os.Symlink(out, filepath.Join(dir, ".rag-go", "indexes", "linked")); err != nil {
 		t.Fatal(err)
 	}
 	preview, err := c.Cleanup(ctx, 1, true)
@@ -98,14 +98,11 @@ func TestCleanupPreviewRetainsActiveAndUnknownFiles(t *testing.T) {
 func TestClosedCoreRejectsWrites(t *testing.T) {
 	c := openTest(t, t.TempDir(), fakeEmbedding{})
 	c.Close()
-	if _, err := c.Index(context.Background(), nil); err == nil {
+	if _, err := c.Sync(context.Background()); err == nil {
 		t.Fatal("Index after Close succeeded")
 	}
 	if _, err := c.Rebuild(context.Background()); err == nil {
 		t.Fatal("Rebuild after Close succeeded")
-	}
-	if err := c.Clear(context.Background()); err == nil {
-		t.Fatal("Clear after Close succeeded")
 	}
 	if _, err := c.Cleanup(context.Background(), 1, false); err == nil {
 		t.Fatal("Cleanup after Close succeeded")

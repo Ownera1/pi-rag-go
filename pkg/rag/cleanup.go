@@ -19,9 +19,7 @@ var generationName = regexp.MustCompile(`^[0-9]+-[0-9a-f]{16}$`)
 // Cleanup retains the active generation and the newest inactive generations,
 // keeping at least keep generations in total. Unknown files and symlinks are
 // never removed. dryRun reports candidates without deleting them.
-func (c *Core) Cleanup(ctx context.Context, keep int, dryRun bool) (result CleanupResult, err error) {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
+func (c *session) cleanup(ctx context.Context, keep int, dryRun bool) (result CleanupResult, err error) {
 	result = CleanupResult{DryRun: dryRun, Retained: []string{}, Removed: []string{}, Skipped: []string{}}
 	if err = c.writable(); err != nil {
 		return result, err
@@ -32,8 +30,6 @@ func (c *Core) Cleanup(ctx context.Context, keep int, dryRun bool) (result Clean
 	if err = ctx.Err(); err != nil {
 		return result, err
 	}
-	c.beginProgress("cleanup")
-	defer func() { c.finishProgress(err) }()
 	root := filepath.Join(c.root, "indexes")
 	info, err := os.Lstat(root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -45,12 +41,10 @@ func (c *Core) Cleanup(ctx context.Context, keep int, dryRun bool) (result Clean
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return result, errors.New("indexes must be a real directory")
 	}
-	c.mu.RLock()
 	active := ""
 	if c.db != nil {
 		active = filepath.Dir(c.db.Path)
 	}
-	c.mu.RUnlock()
 	type generation struct {
 		path    string
 		created int64

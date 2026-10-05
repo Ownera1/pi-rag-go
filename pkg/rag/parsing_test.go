@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/Ownera1/rag-go/internal/document"
@@ -67,10 +66,11 @@ func TestNewFormatsIndexQueryRefreshAndProvenance(t *testing.T) {
 			cfg.Embedding.Dimensions = 2
 			cfg.Embedding.Model = "fake"
 			cfg.Chunking.Mode = mode
+			cfg.Documents = source
 			c := configuredCore(t, filepath.Join(dir, "store"), cfg, fakeEmbedding{})
 			defer c.Close()
-			// Overlapping roots and explicit companion files must still be canonical.
-			r, err := c.Index(ctx, []string{source, filepath.Join(source, "ocr", "full.md")})
+			// Multiple companion artifacts must still produce one canonical document.
+			r, err := c.Sync(ctx)
 			if err != nil || r.Failed != 0 || r.Indexed != 6 {
 				t.Fatalf("index=%+v err=%v", r, err)
 			}
@@ -95,7 +95,7 @@ func TestNewFormatsIndexQueryRefreshAndProvenance(t *testing.T) {
 			// manifest and original PDF haven't changed.
 			body := filepath.Join(source, "converted", "body.tei.xml")
 			sourceFile(t, body, bytes.ReplaceAll(files["converted/body.tei.xml"], []byte("pdfmarker"), []byte("replacementmarker")))
-			r, err = c.Refresh(ctx)
+			r, err = c.Sync(ctx)
 			if err != nil || r.Indexed != 1 || r.Failed != 0 {
 				t.Fatalf("refresh=%+v err=%v", r, err)
 			}
@@ -103,11 +103,22 @@ func TestNewFormatsIndexQueryRefreshAndProvenance(t *testing.T) {
 			if err != nil || len(listed) != 6 {
 				t.Fatalf("refresh changed canonical documents: %v err=%v", listed, err)
 			}
+			metadata.Title = "Updated Title"
+			b, _ = json.Marshal(metadata)
+			sourceFile(t, manifest, b)
+			r, err = c.Sync(ctx)
+			if err != nil || r.Indexed != 1 || r.Skipped != 5 {
+				t.Fatalf("manifest-only change: %+v %v", r, err)
+			}
+			q, err = c.Query(ctx, "replacementmarker", QueryOptions{Mode: "bm25"})
+			if err != nil || len(q.Hits) != 1 || q.Hits[0].Chunk.Title != metadata.Title {
+				t.Fatalf("manifest title: %+v %v", q, err)
+			}
 			if err := os.Remove(body); err != nil {
 				t.Fatal(err)
 			}
-			r, err = c.Refresh(ctx)
-			if err != nil || r.Failed == 0 {
+			r, err = c.Sync(ctx)
+			if err == nil || r.Failed == 0 {
 				t.Fatalf("missing artifact wasn't reported: %+v err=%v", r, err)
 			}
 			q, err = c.Query(ctx, "replacementmarker", QueryOptions{Mode: "bm25"})
@@ -115,26 +126,5 @@ func TestNewFormatsIndexQueryRefreshAndProvenance(t *testing.T) {
 				t.Fatalf("failed refresh destroyed active evidence: %+v err=%v", q, err)
 			}
 		})
-	}
-}
-
-func TestParserUpgradeRequiresRebuild(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	file := filepath.Join(dir, "source.txt")
-	sourceFile(t, file, []byte("known evidence"))
-	c := openTest(t, filepath.Join(dir, "store"), fakeEmbedding{})
-	defer c.Close()
-	if r, err := c.Index(ctx, []string{file}); err != nil || r.Failed != 0 {
-		t.Fatalf("index=%+v err=%v", r, err)
-	}
-	if err := c.db.SetMetadata(ctx, "processing_fingerprint", "older-parser"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.Index(ctx, []string{file}); err == nil || !strings.Contains(err.Error(), "rebuild required") {
-		t.Fatal("old and new parser chunks mixed", err)
-	}
-	if r, err := c.Rebuild(ctx); err != nil || r.Failed != 0 {
-		t.Fatalf("parser upgrade rebuild=%+v err=%v", r, err)
 	}
 }

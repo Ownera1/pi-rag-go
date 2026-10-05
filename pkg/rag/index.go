@@ -20,6 +20,7 @@ import (
 	"github.com/Ownera1/rag-go/internal/document"
 	"github.com/Ownera1/rag-go/internal/model"
 	"github.com/Ownera1/rag-go/internal/store"
+	"github.com/Ownera1/rag-go/internal/workspace"
 )
 
 var skipDirs = map[string]bool{
@@ -42,21 +43,12 @@ var allowed = map[string]bool{
 	".csv": true, ".tsv": true, ".sh": true, ".bash": true, ".zsh": true,
 	".fish": true, ".ps1": true, ".sql": true, ".graphql": true, ".gql": true,
 	".proto": true, ".env": true, ".gitignore": true, ".dockerfile": true, ".tf": true,
-	".hcl": true, ".docx": true, ".html": true, ".htm": true, ".nxml": true, ".pdf": true,
+	".hcl": true, ".docx": true, ".html": true, ".htm": true, ".nxml": true,
 }
 
-func allowedFile(path string, size int64) bool {
-	ext := strings.ToLower(filepath.Ext(path))
-	if !allowed[ext] {
-		return false
-	}
-	if document.IsMinerUFile(path) || strings.HasSuffix(strings.ToLower(path), ".rag-blocks.json") ||
-		strings.HasSuffix(strings.ToLower(path), ".tei.xml") ||
-		ext == ".docx" || ext == ".html" || ext == ".htm" || ext == ".nxml" || ext == ".xml" ||
-		ext == ".md" || ext == ".mdx" || ext == ".pdf" {
-		return size <= document.MaxDocumentBytes
-	}
-	return size < 500_000
+func allowedFile(path string) bool {
+	// Oversized supported inputs are reported by the bounded loader.
+	return allowed[strings.ToLower(filepath.Ext(path))]
 }
 
 func scan(ctx context.Context, root string, patterns []string, ignoredRoots ...string) ([]string, error) {
@@ -77,10 +69,10 @@ func scan(ctx context.Context, root string, patterns []string, ignoredRoots ...s
 		return nil, e
 	}
 	if st.Mode().IsRegular() {
-		if allowedFile(root, st.Size()) {
+		if allowedFile(root) {
 			return []string{root}, nil
 		}
-		return nil, fmt.Errorf("unsupported or oversized file: %s", root)
+		return nil, fmt.Errorf("unsupported file: %s", root)
 	}
 	if !st.IsDir() {
 		return nil, fmt.Errorf("not a file or directory: %s", root)
@@ -125,11 +117,7 @@ func scan(ctx context.Context, root string, patterns []string, ignoredRoots ...s
 		if !d.Type().IsRegular() {
 			return nil
 		}
-		st, e := d.Info()
-		if e != nil {
-			return e
-		}
-		if allowedFile(p, st.Size()) {
+		if allowedFile(p) {
 			found = append(found, p)
 		}
 		return nil
@@ -141,37 +129,6 @@ func scan(ctx context.Context, root string, patterns []string, ignoredRoots ...s
 	return document.CanonicalFiles(ctx, found)
 }
 
-func (c *Core) Index(ctx context.Context, paths []string) (result IndexResult, err error) {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	c.beginProgress("index")
-	defer func() { c.progressFailures(result.Failed); c.finishProgress(err) }()
-	if e := c.writable(); e != nil {
-		return IndexResult{}, e
-	}
-	if e := c.ensureDB(); e != nil {
-		return IndexResult{}, e
-	}
-	if e := c.compatible(ctx, c.db); e != nil {
-		return IndexResult{}, e
-	}
-	result, accepted, _ := c.indexInto(ctx, c.db, paths, false)
-	c.updateState(accepted, result.Failures)
-	if e := c.saveState(); e != nil {
-		return result, e
-	}
-	return result, ctx.Err()
-}
-
-func contains(xs []string, s string) bool {
-	for _, x := range xs {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
-
 type work struct {
 	doc    model.Document
 	chunks []model.Chunk
@@ -181,35 +138,24 @@ type work struct {
 	stage  string
 }
 
-func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, force bool) (IndexResult, []string, []string) {
+func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSnapshot, force bool) IndexResult {
 	result := IndexResult{Errors: []string{}, Failures: []model.FileFailure{}}
-	accepted := []string{}
-	all := map[string]bool{}
-	for _, root := range roots {
-		found, e := scan(ctx, root, c.cfg.ExcludePatterns, c.root)
-		if e != nil {
-			addFailure(&result, root, "scan", e)
-			continue
-		}
-		abs, _ := filepath.Abs(root)
-		accepted = append(accepted, abs)
-		for _, p := range found {
-			all[p] = true
+	paths := []string{}
+	for _, f := range snap.failures {
+		addFailure(&result, f.Path, f.Stage, errors.New(f.Error))
+	}
+	for _, p := range snap.paths {
+		if _, ok := snap.inputs[p]; ok {
+			paths = append(paths, p)
 		}
 	}
-	paths := make([]string, 0, len(all))
-	for p := range all {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
-	paths, e := c.prepare(ctx, paths, &result)
+	previous, e := db.List(ctx)
 	if e != nil {
-		addFailure(&result, strings.Join(roots, ", "), "scan", e)
-		return result, accepted, paths
+		addFailure(&result, c.docs, "store", e)
+		return result
 	}
-	c.progressTotal(len(paths))
 	if len(paths) == 0 {
-		return result, accepted, paths
+		return result
 	}
 	jobs := make(chan string)
 	done := make(chan work, 32)
@@ -225,22 +171,46 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 					done <- work{path: p, stage: "parse", err: e}
 					continue
 				}
+				if !force {
+					hash, embedded, e := db.FileHash(ctx, p)
+					if e != nil {
+						done <- work{path: p, stage: "store", err: e}
+						continue
+					}
+					if hash == snap.inputs[p] && embedded {
+						done <- work{path: p, skip: true}
+						continue
+					}
+				}
 				doc, e := document.Parse(ctx, p)
 				if e != nil {
 					done <- work{path: p, stage: "parse", err: e}
 					continue
 				}
-				if !force {
-					hash, embedded, err := db.FileHash(ctx, p)
-					if err != nil {
-						done <- work{path: p, stage: "store", err: err}
-						continue
+				if doc.Hash != snap.inputs[p] {
+					done <- work{path: p, stage: "parse", err: errors.New("document changed during loading")}
+					continue
+				}
+				logical := p
+				if filepath.Base(p) == "rag-source.json" || document.IsMinerUFile(p) {
+					logical = filepath.Dir(p)
+					for _, old := range previous {
+						if old != p && within(logical, old) {
+							doc.Replaces = append(doc.Replaces, old)
+						}
 					}
-					if hash == doc.Hash && embedded {
-						done <- work{path: p, skip: true}
-						continue
+				} else {
+					// Removing the package's canonical artifact can expose ordinary
+					// files. Retire its old representation in the same transaction,
+					// even when another document prevents global deletion cleanup.
+					for _, old := range previous {
+						if (filepath.Base(old) == "rag-source.json" || document.IsMinerUFile(old)) && within(filepath.Dir(old), p) {
+							doc.Replaces = append(doc.Replaces, old)
+						}
 					}
 				}
+				rel, _ := filepath.Rel(c.docs, logical)
+				doc.ID = document.ShortHash(rel)
 				semantic := c.cfg.Chunking.Mode == "semantic" &&
 					(doc.Format != "text" ||
 						filepath.Base(p) == "rag-source.json" ||
@@ -279,22 +249,19 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 	}()
 	for w := range done {
 		if w.err != nil {
-			addFailure(&result, c.sourceFor(w.path), w.stage, w.err)
-			c.progressResult(result, w.path)
+			addFailure(&result, w.path, w.stage, w.err)
 			continue
 		}
 		if w.skip {
 			result.Skipped++
-			c.progressResult(result, w.path)
 			continue
 		}
 		if c.embedder == nil {
-			addFailure(&result, c.sourceFor(w.path), "embed", errors.New("embedding provider unavailable"))
-			c.progressResult(result, w.path)
+			addFailure(&result, w.path, "embed", errors.New("embedding provider unavailable"))
 			continue
 		}
 		for i := range w.chunks {
-			w.chunks[i].ID = document.ShortHash(w.doc.Path) + "-" + fmt.Sprint(w.chunks[i].ChunkIndex)
+			w.chunks[i].ID = w.doc.ID + "-" + fmt.Sprint(w.chunks[i].ChunkIndex)
 			w.chunks[i].Hash = document.ShortHash(w.chunks[i].Content)
 			w.chunks[i].Tokens = chunk.Estimate(w.chunks[i].Content)
 			w.chunks[i].Path = w.doc.Path
@@ -307,78 +274,28 @@ func (c *Core) indexInto(ctx context.Context, db *store.DB, roots []string, forc
 		for i, ch := range w.chunks {
 			texts[i] = ch.Content
 		}
-		c.progressFile(w.path, "embedding")
 		vectors, e := c.embedder.EmbedDocuments(ctx, texts)
 		stage := "embed"
+		if e == nil {
+			stage = "input"
+			hash, checkErr := document.InputFingerprint(ctx, w.path)
+			e = checkErr
+			if e == nil && hash != w.doc.Hash {
+				e = errors.New("document changed during embedding; existing content retained")
+			}
+		}
 		if e == nil {
 			stage = "store"
 			e = db.Replace(ctx, w.doc, w.chunks, vectors)
 		}
 		if e != nil {
-			addFailure(&result, c.sourceFor(w.path), stage, e)
-			c.progressResult(result, w.path)
+			addFailure(&result, w.path, stage, e)
 			continue
 		}
 		result.Indexed++
 		result.Chunks += len(w.chunks)
-		c.progressResult(result, w.path)
 	}
-	return result, accepted, paths
-}
-
-func (c *Core) Refresh(ctx context.Context) (result IndexResult, err error) {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	c.beginProgress("refresh")
-	defer func() { c.progressFailures(result.Failed); c.finishProgress(err) }()
-	if e := c.writable(); e != nil {
-		return IndexResult{}, e
-	}
-	if len(c.tracked()) == 0 {
-		return IndexResult{Errors: []string{}}, nil
-	}
-	if e := c.ensureDB(); e != nil {
-		return IndexResult{}, e
-	}
-	if e := c.compatible(ctx, c.db); e != nil {
-		return IndexResult{}, e
-	}
-	result, accepted, snapshot := c.indexInto(ctx, c.db, c.tracked(), false)
-	c.updateState(accepted, result.Failures)
-	if e := c.saveState(); e != nil {
-		return result, e
-	}
-	if e := ctx.Err(); e != nil {
-		return result, e
-	}
-	if result.Failed > 0 {
-		return result, nil
-	}
-	// Recheck root accessibility before pruning; conversion is performed only once.
-	for _, root := range c.tracked() {
-		if _, e := scan(ctx, root, c.cfg.ExcludePatterns, c.root); e != nil {
-			return result, e
-		}
-	}
-	present := map[string]bool{}
-	for _, p := range snapshot {
-		present[p] = true
-	}
-	indexed, e := c.db.List(ctx)
-	if e != nil {
-		return result, e
-	}
-	for _, p := range indexed {
-		if !present[p] {
-			if e = c.db.Delete(ctx, p); e != nil {
-				return result, e
-			}
-			c.stateMu.Lock()
-			delete(c.sourcePaths, p)
-			c.stateMu.Unlock()
-		}
-	}
-	return result, c.saveState()
+	return result
 }
 
 func randomID() string {
@@ -387,7 +304,7 @@ func randomID() string {
 	return fmt.Sprintf("%d-%s", time.Now().UnixNano(), hex.EncodeToString(b))
 }
 
-func (c *Core) publish(ctx context.Context, stage *store.DB, stageDir string) error {
+func (c *session) publish(ctx context.Context, stage *store.DB, stageDir string) error {
 	st, e := stage.Stats(ctx)
 	if e != nil {
 		return e
@@ -430,78 +347,44 @@ func (c *Core) publish(ctx context.Context, stage *store.DB, stageDir string) er
 		next.Close()
 		return e
 	}
-	tmp := filepath.Join(c.root, "active.json.tmp")
-	if e = os.WriteFile(tmp, b, 0600); e != nil {
+	if e = workspace.AtomicFile(filepath.Join(c.root, "active.json"), b, 0600); e != nil {
 		next.Close()
 		return e
 	}
-	if e = os.Rename(tmp, filepath.Join(c.root, "active.json")); e != nil {
-		next.Close()
-		return e
-	}
-	c.mu.Lock()
 	old := c.db
 	c.db = next
-	c.mu.Unlock()
 	if old != nil {
 		return old.Close()
 	}
 	return nil
 }
 
-func (c *Core) Rebuild(ctx context.Context) (result IndexResult, err error) {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	c.beginProgress("rebuild")
-	defer func() { c.progressFailures(result.Failed); c.finishProgress(err) }()
-	if e := c.writable(); e != nil {
-		return IndexResult{}, e
-	}
-	if len(c.tracked()) == 0 {
-		return IndexResult{}, errors.New("no tracked paths to rebuild")
-	}
+func (c *session) rebuild(ctx context.Context) (result IndexResult, err error) {
+	snap := c.snapshot(ctx)
 	stageDir := filepath.Join(c.root, "staging", randomID())
-	db, e := store.Open(filepath.Join(stageDir, "rag.db"), false, c.cfg.Embedding.Dimensions)
-	if e != nil {
-		return IndexResult{}, e
-	}
-	open := true
-	defer func() {
-		if open {
-			db.Close()
-		}
-		_ = os.RemoveAll(stageDir)
-	}()
-	result, accepted, _ := c.indexInto(ctx, db, c.tracked(), true)
-	c.updateState(accepted, result.Failures)
-	if e := c.saveState(); e != nil {
-		return result, e
-	}
-	if result.Failed > 0 {
-		return result, errors.New("rebuild failed; active index preserved")
-	}
-	if e = ctx.Err(); e != nil {
-		return result, e
-	}
-	if e = c.publish(ctx, db, stageDir); e != nil {
-		return result, e
-	}
-	open = false
-	return result, nil
-}
-
-func (c *Core) Clear(ctx context.Context) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	if e := c.writable(); e != nil {
-		return e
-	}
-	stageDir := filepath.Join(c.root, "staging", randomID())
-	db, e := store.Open(filepath.Join(stageDir, "rag.db"), false, c.cfg.Embedding.Dimensions)
-	if e != nil {
-		return e
+	db, err := store.Open(filepath.Join(stageDir, "rag.db"), false, c.cfg.Embedding.Dimensions)
+	if err != nil {
+		return result, err
 	}
 	defer os.RemoveAll(stageDir)
 	defer db.Close()
-	return c.publish(ctx, db, stageDir)
+	result = c.indexSnapshot(ctx, db, snap, true)
+	after := c.snapshot(ctx)
+	if result.Failed == 0 && after.signature != snap.signature {
+		addFailure(&result, c.docs, "scan", errors.New("documents changed during rebuild"))
+	}
+	if ctx.Err() != nil {
+		return result, ctx.Err()
+	}
+	if result.Failed > 0 {
+		// Preserve successful inputs from the still-active index on a failed rebuild.
+		if e := c.record(snap, result); e != nil {
+			return result, e
+		}
+		return result, errors.New("rebuild failed; active index preserved")
+	}
+	if err = c.publish(ctx, db, stageDir); err != nil {
+		return result, err
+	}
+	return result, c.record(snap, result)
 }

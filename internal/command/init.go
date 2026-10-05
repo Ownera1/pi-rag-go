@@ -9,175 +9,193 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/Ownera1/rag-go/internal/model"
 	"github.com/Ownera1/rag-go/internal/provider"
-	"github.com/Ownera1/rag-go/pkg/rag"
+	"github.com/Ownera1/rag-go/internal/store"
+	"github.com/Ownera1/rag-go/internal/workspace"
 	"golang.org/x/term"
 )
 
-func Initialize(ctx context.Context, args []string, in io.Reader, out, errout io.Writer) error {
+func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io.Writer) error {
 	fs := flag.NewFlagSet("rag init", flag.ContinueOnError)
-	fs.SetOutput(errout)
-	store := fs.String("store", DefaultStore(), "store directory")
-	embedding := fs.String("embedding-type", "voyage", "voyage or openai")
-	modelName := fs.String("model", "voyage-4-lite", "embedding model")
+	fs.SetOutput(stderr)
+	explicit := fs.String("workspace", "", "workspace root")
+	docs := fs.String("docs", "documents", "single documents directory")
+	kind := fs.String("embedding-type", "voyage", "voyage or openai")
+	name := fs.String("model", "voyage-4-lite", "embedding model")
 	dimensions := fs.Int("dimensions", 1024, "embedding dimensions")
-	base := fs.String("base-url", "https://api.voyageai.com/v1", "embedding API prefix")
-	keyEnv := fs.String("api-key-env", "VOYAGE_API_KEY", "credential environment variable; empty for unauthenticated provider")
-	backend := fs.String("pdf-backend", "", "pdftotext, grobid or mineru")
-	url := fs.String("pdf-url", "http://127.0.0.1:8070", "GROBID URL")
-	converter := fs.String("pdf-command", "", "converter executable path")
-	listen := fs.String("listen", "127.0.0.1:7331", "loopback service address")
-	offline := fs.Bool("offline", false, "skip live embedding probe")
-	enable := fs.Bool("enable-auto-refresh", false, "enable automatic refresh on an existing store")
-	legacy := fs.Bool("legacy-readonly", false, "inspect an existing TypeScript store without initializing")
-	if err := fs.Parse(args); err != nil {
+	base := fs.String("base-url", "https://api.voyageai.com/v1", "embedding endpoint prefix")
+	keyEnv := fs.String("api-key-env", "VOYAGE_API_KEY", "credential environment name; empty for no authentication")
+	offline := fs.Bool("offline", false, "skip embedding probe")
+	if err := fs.Parse(ReorderFlags(args, map[string]bool{"offline": true, "h": true, "help": true})); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 {
-		return errors.New("unexpected init arguments")
+	if fs.NArg() > 1 || fs.NArg() == 1 && *explicit != "" {
+		return errors.New("usage: rag init [workspace] [--docs PATH]")
 	}
-	root, err := filepath.Abs(*store)
-	if err != nil {
-		return err
+	root := *explicit
+	if fs.NArg() == 1 {
+		root = fs.Arg(0)
 	}
-	if *legacy {
-		core, err := rag.Open(rag.Options{StoreDir: root, LegacyReadOnly: true})
+	if root == "" {
+		var err error
+		root, err = os.Getwd()
 		if err != nil {
 			return err
 		}
-		defer core.Close()
-		status, err := core.Status(ctx)
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(out).Encode(status)
 	}
-	cfg, err := settings(root)
+	root, err := filepath.Abs(root)
 	if err != nil {
 		return err
 	}
-	_, statErr := os.Stat(filepath.Join(root, "config.json"))
-	fresh := errors.Is(statErr, os.ErrNotExist)
-	interactive := false
+	storeDir := workspace.Store(root)
+	if err = os.MkdirAll(storeDir, 0700); err != nil {
+		return err
+	}
+	if err = os.Chmod(storeDir, 0700); err != nil {
+		return err
+	}
+	lock, err := os.OpenFile(filepath.Join(storeDir, ".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	lock.Close()
+	release, err := workspace.Lock(ctx, root, true)
+	if err != nil {
+		return err
+	}
+	defer release()
+	cfg := model.DefaultConfig()
+	fresh := false
+	path := filepath.Join(storeDir, "config.json")
+	if _, err = os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		fresh = true
+	} else if err != nil {
+		return err
+	} else {
+		cfg, err = model.LoadConfig(path)
+		if err != nil {
+			return err
+		}
+	}
+	values, err := workspace.Credentials(root)
+	if err != nil {
+		return err
+	}
+	supplied := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { supplied[f.Name] = true })
 	inputFile, ok := in.(*os.File)
-	if ok {
-		interactive = term.IsTerminal(int(inputFile.Fd()))
-	}
+	interactive := ok && term.IsTerminal(int(inputFile.Fd()))
 	reader := bufio.NewReader(in)
-	ask := func(label, fallback string) (string, error) {
-		fmt.Fprintf(errout, "%s [%s]: ", label, fallback)
+	ask := func(label, current string) (string, error) {
+		fmt.Fprintf(stderr, "%s [%s]: ", label, current)
 		s, e := reader.ReadString('\n')
 		if e != nil && !errors.Is(e, io.EOF) {
 			return "", e
 		}
-		s = strings.TrimSpace(s)
-		if s == "" {
-			s = fallback
+		if s = strings.TrimSpace(s); s == "" {
+			s = current
 		}
 		return s, nil
 	}
-	if fresh {
-		if interactive {
-			explicit := map[string]bool{}
-			fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
-			if !explicit["embedding-type"] {
-				*embedding, err = ask("Embedding provider (voyage/openai)", *embedding)
-				if err != nil {
-					return err
-				}
+	if fresh && interactive {
+		if !supplied["docs"] {
+			*docs, err = ask("Documents directory", *docs)
+			if err != nil {
+				return err
 			}
-			if *embedding == "openai" {
-				if !explicit["model"] {
-					*modelName = ""
-				}
-				if !explicit["base-url"] {
-					*base = ""
-				}
-				if !explicit["api-key-env"] {
-					*keyEnv = ""
-				}
+		}
+		if !supplied["embedding-type"] {
+			*kind, err = ask("Embedding provider (voyage/openai)", *kind)
+			if err != nil {
+				return err
 			}
-			if !explicit["model"] {
-				*modelName, err = ask("Exact embedding model", *modelName)
-				if err != nil {
-					return err
-				}
+		}
+		if *kind == "openai" {
+			if !supplied["model"] {
+				*name = ""
 			}
-			if !explicit["dimensions"] {
-				s, e := ask("Embedding dimensions", strconv.Itoa(*dimensions))
-				if e != nil {
-					return e
-				}
-				*dimensions, err = strconv.Atoi(s)
-				if err != nil {
-					return err
-				}
+			if !supplied["base-url"] {
+				*base = ""
 			}
-			if !explicit["base-url"] {
+			if !supplied["api-key-env"] {
+				*keyEnv = ""
+			}
+		}
+		if !supplied["model"] {
+			*name, err = ask("Embedding model", *name)
+			if err != nil {
+				return err
+			}
+		}
+		if *kind == "openai" {
+			if !supplied["base-url"] {
 				*base, err = ask("Embedding API prefix", *base)
 				if err != nil {
 					return err
 				}
 			}
-			if !explicit["api-key-env"] {
-				*keyEnv, err = ask("Credential environment name (empty for no authentication)", *keyEnv)
+			if !supplied["dimensions"] {
+				v, e := ask("Embedding dimensions", strconv.Itoa(*dimensions))
+				if e != nil {
+					return e
+				}
+				*dimensions, err = strconv.Atoi(v)
 				if err != nil {
 					return err
 				}
 			}
-			if *backend == "" {
-				*backend, err = ask("PDF backend (pdftotext/grobid/mineru)", "pdftotext")
+			if !supplied["api-key-env"] {
+				*keyEnv, err = ask("API key environment name", *keyEnv)
 				if err != nil {
 					return err
 				}
 			}
 		}
-		cfg.Embedding = rag.ProviderConfig{Type: *embedding, Model: *modelName, Dimensions: *dimensions, BaseURL: *base, APIKeyEnv: *keyEnv}
-		cfg.Runtime.Listen = *listen
-		cfg.Runtime.AutoRefresh.Enabled = true
-		cfg.Runtime.AutoRefresh.DebounceMs = 3000
-		cfg.Runtime.AutoRefresh.RescanMs = 300000
 	}
-	if fresh || *enable {
-		cfg.Runtime.AutoRefresh.Enabled = true
+	if fresh || supplied["docs"] {
+		cfg.Documents = *docs
 	}
-	if *backend != "" {
-		cfg.Runtime.PDF.Backend = *backend
-		cfg.Runtime.PDF.URL = *url
-		cfg.Runtime.PDF.Command = *converter
-		cfg.Runtime.PDF.TimeoutMs = 600000
+	if fresh {
+		cfg.Embedding = model.ProviderConfig{Type: *kind, Model: *name, Dimensions: *dimensions, BaseURL: *base, APIKeyEnv: *keyEnv}
+	} else {
+		if supplied["embedding-type"] {
+			cfg.Embedding.Type = *kind
+		}
+		if supplied["model"] {
+			cfg.Embedding.Model = *name
+		}
+		if supplied["dimensions"] {
+			cfg.Embedding.Dimensions = *dimensions
+		}
+		if supplied["base-url"] {
+			cfg.Embedding.BaseURL = *base
+		}
+		if supplied["api-key-env"] {
+			cfg.Embedding.APIKeyEnv = *keyEnv
+		}
 	}
 	if err = cfg.Validate(); err != nil {
 		return err
 	}
-	addr := cfg.Runtime.Listen
-	if addr == "" {
-		addr = "127.0.0.1:7331"
+	resolvedDocs := cfg.Documents
+	if !filepath.IsAbs(resolvedDocs) {
+		resolvedDocs = filepath.Join(root, resolvedDocs)
 	}
-	if err = validateListen(addr); err != nil {
-		return err
+	rel, _ := filepath.Rel(storeDir, resolvedDocs)
+	if rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errors.New("documents cannot be inside .rag-go")
 	}
-	// Probe the existing store before writing config or credentials. This also enforces the legacy marker.
-	core, err := rag.Open(rag.Options{StoreDir: root, Embedder: nil})
-	if err != nil {
-		return err
-	}
-	core.Close()
-	values, err := loadCredentials(root)
-	if err != nil {
-		return err
-	}
-	for _, p := range []rag.ProviderConfig{cfg.Embedding, cfg.Reranker} {
+	for _, p := range []model.ProviderConfig{cfg.Embedding, cfg.Reranker} {
 		name := p.APIKeyEnv
 		if name == "" {
 			continue
 		}
-		if !envName.MatchString(name) {
+		if !workspace.EnvName.MatchString(name) {
 			return errors.New("invalid apiKeyEnv")
 		}
 		value := os.Getenv(name)
@@ -185,9 +203,9 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, errout io
 			value = values[name]
 		}
 		if value == "" && interactive {
-			fmt.Fprintf(errout, "%s (hidden): ", name)
+			fmt.Fprintf(stderr, "%s (hidden): ", name)
 			b, e := term.ReadPassword(int(inputFile.Fd()))
-			fmt.Fprintln(errout)
+			fmt.Fprintln(stderr)
 			if e != nil {
 				return e
 			}
@@ -197,73 +215,60 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, errout io
 			values[name] = value
 		}
 	}
-	checks := map[string]string{}
-	problems := []string{}
-	switch cfg.Runtime.PDF.Backend {
-	case "pdftotext", "mineru":
-		name := cfg.Runtime.PDF.Command
-		if name == "" {
-			name = "pdftotext"
-			if cfg.Runtime.PDF.Backend == "mineru" {
-				name = "mineru-kit"
-			}
-		}
-		path, e := exec.LookPath(name)
+	// Refuse unknown existing data before publishing any configuration changes.
+	dbPath, e := store.ResolvePath(storeDir)
+	if e != nil {
+		return e
+	}
+	if _, e = os.Stat(dbPath); e == nil {
+		db, e := store.Open(dbPath, true, 0)
 		if e != nil {
-			checks["pdf"] = "missing " + name
-			problems = append(problems, "PDF converter is missing: "+name)
-		} else {
-			cfg.Runtime.PDF.Command = path
-			checks["pdf"] = "executable available"
+			return e
 		}
-	case "grobid":
-		checks["pdf"] = "configured; service probe follows"
-	case "":
-		checks["pdf"] = "not configured"
-		problems = append(problems, "select a PDF backend with --pdf-backend")
-	default:
-		return errors.New("pdf-backend must be pdftotext, grobid or mineru")
-	}
-	if fresh || *enable || *backend != "" {
-		if err = atomicJSON(filepath.Join(root, "config.json"), cfg); err != nil {
-			return err
+		version := db.GetMetadata(ctx, "go_storage_version")
+		db.Close()
+		if version != "1" {
+			return errors.New("existing database is not a recognized Go store; initialize a separate workspace")
 		}
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return e
 	}
-	if len(values) > 0 {
-		if err = atomicJSON(filepath.Join(root, "credentials.json"), values); err != nil {
-			return err
-		}
-	}
-	if err = applyCredentials(root); err != nil {
+	if err = os.MkdirAll(resolvedDocs, 0755); err != nil {
 		return err
 	}
-	if *offline {
-		checks["embedding"] = "not checked (offline)"
-	} else {
+	if err = workspace.AtomicJSON(path, cfg); err != nil {
+		return err
+	}
+	if len(values) > 0 {
+		if err = workspace.AtomicJSON(filepath.Join(storeDir, "credentials.json"), values); err != nil {
+			return err
+		}
+	}
+	if _, err = os.Stat(filepath.Join(storeDir, "state.json")); errors.Is(err, os.ErrNotExist) {
+		if err = workspace.AtomicJSON(filepath.Join(storeDir, "state.json"), map[string]any{"inputs": map[string]string{}, "failedFiles": []any{}}); err != nil {
+			return err
+		}
+	}
+	if err = workspace.AtomicFile(filepath.Join(storeDir, ".gitignore"), []byte("*\n"), 0600); err != nil {
+		return err
+	}
+	checks := map[string]string{"embedding": "not checked (offline)"}
+	var problem error
+	if !*offline {
 		p, e := provider.NewHTTP(cfg.Embedding, cfg.HTTPTimeoutMs, 0)
 		if e == nil {
+			p.SetCredential(values[cfg.Embedding.APIKeyEnv])
 			_, e = p.EmbedQuery(ctx, "rag-go initialization probe")
 		}
 		if e != nil {
 			checks["embedding"] = "failed"
-			problems = append(problems, "embedding probe failed; check endpoint, credential, model and dimensions")
+			problem = errors.New("embedding probe failed; check endpoint, credential, model and dimensions")
 		} else {
 			checks["embedding"] = "reachable; dimensions verified"
 		}
 	}
-	if cfg.Runtime.PDF.Backend == "grobid" {
-		if err = probeGrobid(ctx, cfg.Runtime.PDF.URL); err != nil {
-			checks["pdf"] = "unreachable"
-			problems = append(problems, "GROBID service is unavailable")
-		} else {
-			checks["pdf"] = "reachable"
-		}
-	}
-	if err = json.NewEncoder(out).Encode(map[string]any{"store": root, "created": fresh, "checks": checks, "problems": problems}); err != nil {
+	if err = json.NewEncoder(out).Encode(map[string]any{"workspace": root, "documents": resolvedDocs, "created": fresh, "checks": checks}); err != nil {
 		return err
 	}
-	if len(problems) > 0 {
-		return errors.New(strings.Join(problems, "; "))
-	}
-	return nil
+	return problem
 }

@@ -12,15 +12,16 @@ type Block struct {
 }
 
 type Document struct {
-	ID            string  `json:"id"`
-	SourcePath    string  `json:"sourcePath,omitempty"`
-	Title         string  `json:"title,omitempty"`
-	ParserVersion string  `json:"parserVersion"`
-	Path          string  `json:"path"`
-	Hash          string  `json:"hash"`
-	Size          int64   `json:"size"`
-	Format        string  `json:"format"`
-	Blocks        []Block `json:"blocks"`
+	Replaces      []string `json:"-"`
+	ID            string   `json:"id"`
+	SourcePath    string   `json:"sourcePath,omitempty"`
+	Title         string   `json:"title,omitempty"`
+	ParserVersion string   `json:"parserVersion"`
+	Path          string   `json:"path"`
+	Hash          string   `json:"hash"`
+	Size          int64    `json:"size"`
+	Format        string   `json:"format"`
+	Blocks        []Block  `json:"blocks"`
 }
 
 type Chunk struct {
@@ -50,6 +51,7 @@ type Hit struct {
 }
 
 type QueryOptions struct {
+	DisableSync   bool     `json:"disable_sync,omitempty"`
 	TopK          int      `json:"top_k"`
 	CandidateTopK int      `json:"candidate_top_k"`
 	Alpha         *float64 `json:"alpha,omitempty"`
@@ -59,12 +61,15 @@ type QueryOptions struct {
 }
 
 type QueryResult struct {
-	Query     string     `json:"query"`
-	Hits      []Hit      `json:"hits"`
-	Method    string     `json:"method"`
-	Degraded  string     `json:"degraded,omitempty"`
-	ElapsedMs float64    `json:"elapsedMs"`
-	Usage     QueryUsage `json:"usage"`
+	Freshness string       `json:"freshness"`
+	Sync      *IndexResult `json:"sync,omitempty"`
+	SyncError string       `json:"syncError,omitempty"`
+	Query     string       `json:"query"`
+	Hits      []Hit        `json:"hits"`
+	Method    string       `json:"method"`
+	Degraded  string       `json:"degraded,omitempty"`
+	ElapsedMs float64      `json:"elapsedMs"`
+	Usage     QueryUsage   `json:"usage"`
 }
 
 // Token counts are estimates; calls count logical provider calls, excluding retries.
@@ -76,25 +81,9 @@ type QueryUsage struct {
 }
 
 type FileFailure struct {
-	Retryable bool   `json:"retryable,omitempty"`
-	Path      string `json:"path"`
-	Stage     string `json:"stage"`
-	Error     string `json:"error"`
-}
-
-type Progress struct {
-	Operation   string `json:"operation"`
-	Phase       string `json:"phase"`
-	Running     bool   `json:"running"`
-	Total       int    `json:"total"`
-	Processed   int    `json:"processed"`
-	Indexed     int    `json:"indexed"`
-	Skipped     int    `json:"skipped"`
-	Failed      int    `json:"failed"`
-	CurrentFile string `json:"currentFile,omitempty"`
-	StartedAt   string `json:"startedAt,omitempty"`
-	FinishedAt  string `json:"finishedAt,omitempty"`
-	Error       string `json:"error,omitempty"`
+	Path  string `json:"path"`
+	Stage string `json:"stage"`
+	Error string `json:"error"`
 }
 
 type CleanupResult struct {
@@ -105,6 +94,7 @@ type CleanupResult struct {
 }
 
 type IndexResult struct {
+	Removed  int           `json:"removed"`
 	Indexed  int           `json:"indexed"`
 	Skipped  int           `json:"skipped"`
 	Failed   int           `json:"failed"`
@@ -114,32 +104,23 @@ type IndexResult struct {
 }
 
 type Status struct {
-	AutoRefresh    *AutoRefreshStatus `json:"autoRefresh,omitempty"`
-	StoreDir       string             `json:"storeDir"`
-	ReadOnly       bool               `json:"readOnly"`
-	Files          int                `json:"files"`
-	Chunks         int                `json:"chunks"`
-	Vectors        int                `json:"vectors"`
-	EmbeddingModel string             `json:"embeddingModel"`
-	Dimensions     int                `json:"dimensions"`
-	NeedsRebuild   bool               `json:"needsRebuild"`
-	RebuildReason  string             `json:"rebuildReason,omitempty"`
-	ActiveDB       string             `json:"activeDb"`
-	TrackedPaths   []string           `json:"trackedPaths"`
-	FailedFiles    []FileFailure      `json:"failedFiles"`
-	Progress       Progress           `json:"progress"`
-}
-
-type AutoRefreshStatus struct {
-	Enabled         bool   `json:"enabled"`
-	Pending         int    `json:"pending"`
-	Running         bool   `json:"running"`
-	LastCompletedAt string `json:"lastCompletedAt,omitempty"`
-	LastError       string `json:"lastError,omitempty"`
-}
-type RemoveResult struct {
-	UntrackedPaths   []string `json:"untrackedPaths"`
-	RemovedDocuments int      `json:"removedDocuments"`
+	WorkspaceDir   string        `json:"workspaceDir"`
+	DocumentsRoot  string        `json:"documentsRoot"`
+	StoreDir       string        `json:"storeDir"`
+	ReadOnly       bool          `json:"readOnly"`
+	Files          int           `json:"files"`
+	Chunks         int           `json:"chunks"`
+	Vectors        int           `json:"vectors"`
+	EmbeddingModel string        `json:"embeddingModel"`
+	Dimensions     int           `json:"dimensions"`
+	NeedsRebuild   bool          `json:"needsRebuild"`
+	RebuildReason  string        `json:"rebuildReason,omitempty"`
+	ActiveDB       string        `json:"activeDb"`
+	NeedsSync      bool          `json:"needsSync"`
+	FailedFiles    []FileFailure `json:"failedFiles"`
+	LastSync       *IndexResult  `json:"lastSync,omitempty"`
+	LastAttemptAt  string        `json:"lastAttemptAt,omitempty"`
+	FreshnessError string        `json:"freshnessError,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -168,36 +149,17 @@ type IndexingConfig struct {
 }
 
 type Config struct {
-	Runtime         RuntimeConfig  `json:"runtime,omitempty"`
+	Documents       string         `json:"documents"`
 	Embedding       ProviderConfig `json:"embedding"`
 	Reranker        ProviderConfig `json:"reranker"`
 	Chunking        ChunkingConfig `json:"chunking"`
 	Indexing        IndexingConfig `json:"indexing"`
-	TrackedPaths    []string       `json:"trackedPaths"`
 	ExcludePatterns []string       `json:"excludePatterns"`
 	Alpha           float64        `json:"alpha"`
 	CandidateTopK   int            `json:"candidateTopK"`
 	TopK            int            `json:"topK"`
 	HTTPTimeoutMs   int            `json:"httpTimeoutMs"`
 	HTTPMaxRetries  int            `json:"httpMaxRetries"`
-}
-
-// Runtime settings do not change the embedding or processing fingerprints.
-type RuntimeConfig struct {
-	Listen      string            `json:"listen,omitempty"`
-	PDF         PDFConfig         `json:"pdf,omitempty"`
-	AutoRefresh AutoRefreshConfig `json:"autoRefresh,omitempty"`
-}
-type PDFConfig struct {
-	Backend   string `json:"backend,omitempty"`
-	URL       string `json:"url,omitempty"`
-	Command   string `json:"command,omitempty"`
-	TimeoutMs int    `json:"timeoutMs,omitempty"`
-}
-type AutoRefreshConfig struct {
-	Enabled    bool `json:"enabled"`
-	DebounceMs int  `json:"debounceMs,omitempty"`
-	RescanMs   int  `json:"rescanMs,omitempty"`
 }
 
 type EmbeddingProvider interface {

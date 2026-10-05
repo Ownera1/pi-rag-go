@@ -178,9 +178,9 @@ func (d *DB) SetMetadata(ctx context.Context, key, value string) error {
 
 func (d *DB) Stats(ctx context.Context) (model.Status, error) {
 	if d == nil {
-		return model.Status{TrackedPaths: []string{}}, nil
+		return model.Status{FailedFiles: []model.FileFailure{}}, nil
 	}
-	s := model.Status{ReadOnly: d.ReadOnly, ActiveDB: d.Path, TrackedPaths: []string{}}
+	s := model.Status{ReadOnly: d.ReadOnly, ActiveDB: d.Path, FailedFiles: []model.FileFailure{}}
 	if err := d.SQL.QueryRowContext(ctx, "SELECT COUNT(*) FROM files").Scan(&s.Files); err != nil {
 		return s, err
 	}
@@ -225,11 +225,35 @@ func (d *DB) Replace(ctx context.Context, doc model.Document, chunks []model.Chu
 		return e
 	}
 	defer tx.Rollback()
-	if _, e = tx.ExecContext(ctx, "DELETE FROM chunks_vec WHERE rowid IN (SELECT rowid FROM chunks WHERE file_path=?)", doc.Path); e != nil {
+	// Replace alternate artifacts of the same logical document in one transaction.
+	obsolete := append([]string{doc.Path}, doc.Replaces...)
+	rows, e := tx.QueryContext(ctx, "SELECT path FROM files WHERE document_id=?", doc.ID)
+	if e != nil {
 		return e
 	}
-	if _, e = tx.ExecContext(ctx, "DELETE FROM chunks WHERE file_path=?", doc.Path); e != nil {
+	for rows.Next() {
+		var path string
+		if e = rows.Scan(&path); e != nil {
+			rows.Close()
+			return e
+		}
+		obsolete = append(obsolete, path)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
 		return e
+	}
+	for _, path := range obsolete {
+		if _, e = tx.ExecContext(ctx, "DELETE FROM chunks_vec WHERE rowid IN (SELECT rowid FROM chunks WHERE file_path=?)", path); e != nil {
+			return e
+		}
+		if _, e = tx.ExecContext(ctx, "DELETE FROM chunks WHERE file_path=?", path); e != nil {
+			return e
+		}
+		if _, e = tx.ExecContext(ctx, "DELETE FROM files WHERE path=?", path); e != nil {
+			return e
+		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for i, c := range chunks {
@@ -385,12 +409,9 @@ func (d *DB) Chunks(ctx context.Context, ids []int64) (map[int64]model.Chunk, er
 	}
 	columns := `chunks.rowid, chunks.id, file_path, chunk_content, line_start, line_end,
         chunk_hash, indexed_at, tokens, page_start, page_end, section, chunk_index`
-	join := ""
-	if !d.ReadOnly {
-		columns += `, COALESCE(source_path,''), COALESCE(title,''),
+	columns += `, COALESCE(source_path,''), COALESCE(title,''),
             COALESCE(format,''), COALESCE(parser_version,'')`
-		join = " LEFT JOIN chunk_sources ON chunk_sources.chunk_id=chunks.id"
-	}
+	join := " LEFT JOIN chunk_sources ON chunk_sources.chunk_id=chunks.id"
 	q := "SELECT " + columns + " FROM chunks" + join + " WHERE chunks.rowid IN (" + strings.Join(placeholders, ",") + ")"
 	rows, e := d.SQL.QueryContext(ctx, q, args...)
 	if e != nil {
@@ -407,9 +428,7 @@ func (d *DB) Chunks(ctx context.Context, ids []int64) (map[int64]model.Chunk, er
 			&id, &c.ID, &c.Path, &c.Content, &c.LineStart, &c.LineEnd, &c.Hash,
 			&indexed, &c.Tokens, &pageA, &pageB, &sec, &c.ChunkIndex,
 		}
-		if !d.ReadOnly {
-			dest = append(dest, &c.SourcePath, &c.Title, &c.Format, &c.ParserVersion)
-		}
+		dest = append(dest, &c.SourcePath, &c.Title, &c.Format, &c.ParserVersion)
 		if e = rows.Scan(dest...); e != nil {
 			return nil, e
 		}

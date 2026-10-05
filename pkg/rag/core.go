@@ -1,3 +1,4 @@
+// Package rag provides a workspace-scoped retrieval engine shared by CLI and MCP.
 package rag
 
 import (
@@ -9,14 +10,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync"
-	"syscall"
+	"sync/atomic"
+	"time"
 
 	"github.com/Ownera1/rag-go/internal/document"
 	"github.com/Ownera1/rag-go/internal/model"
 	"github.com/Ownera1/rag-go/internal/provider"
 	"github.com/Ownera1/rag-go/internal/store"
+	"github.com/Ownera1/rag-go/internal/workspace"
 )
 
 type Block = model.Block
@@ -33,247 +34,163 @@ type ProviderConfig = model.ProviderConfig
 type ChunkingConfig = model.ChunkingConfig
 type IndexingConfig = model.IndexingConfig
 type FileFailure = model.FileFailure
-type Progress = model.Progress
 type CleanupResult = model.CleanupResult
-type AutoRefreshStatus = model.AutoRefreshStatus
-type RemoveResult = model.RemoveResult
 type EmbeddingProvider = model.EmbeddingProvider
 type Reranker = model.Reranker
 
 type Options struct {
-	SourcePreparer    SourcePreparer
-	AutoRefreshStatus func() AutoRefreshStatus
-	StoreDir          string
-	ConfigPath        string
-	LegacyReadOnly    bool
-	Embedder          EmbeddingProvider
-	Reranker          Reranker
+	WorkspaceDir string
+	ReadOnly     bool
+	Embedder     EmbeddingProvider
+	Reranker     Reranker
 }
 
+// Core retains immutable options only. Each call obtains a new locked session.
+// Injected providers must support concurrent calls when Core is used concurrently.
 type Core struct {
-	preparer            SourcePreparer
-	autoRefreshStatus   func() AutoRefreshStatus
-	sourcePaths         map[string]string
-	root                string
-	configPath          string
-	cfg                 Config
-	legacy              bool
-	legacyProviderID    string
-	legacyContract      string
-	legacyProviderError error
-	embedder            EmbeddingProvider
-	reranker            Reranker
-	mu                  sync.RWMutex
-	writeMu             sync.Mutex
-	db                  *store.DB
-	lock                *os.File
-	closed              bool
-	stateMu             sync.RWMutex
-	trackedPaths        []string
-	failedFiles         []model.FileFailure
-	progress            model.Progress
+	opts   Options
+	closed atomic.Bool
+}
+
+type session struct {
+	workspace string
+	root      string
+	docs      string
+	cfg       Config
+	state     savedState
+	db        *store.DB
+	embedder  EmbeddingProvider
+	reranker  Reranker
+	readOnly  bool
+	release   func()
 }
 
 func DefaultConfig() Config { return model.DefaultConfig() }
 
 func Open(opts Options) (*Core, error) {
-	if opts.StoreDir == "" {
-		return nil, errors.New("StoreDir is required")
-	}
-	root, e := filepath.Abs(opts.StoreDir)
-	if e != nil {
-		return nil, e
-	}
-	path := opts.ConfigPath
-	if path == "" {
-		path = filepath.Join(root, "config.json")
-	}
-	cfg := model.DefaultConfig()
-	legacyProviderID := ""
-	if _, err := os.Stat(path); err == nil {
-		if opts.LegacyReadOnly {
-			b, e := os.ReadFile(path)
-			if e != nil {
-				return nil, e
-			}
-			var saved struct {
-				Embedding struct {
-					Provider, Model string
-					Dimensions      int
-				}
-				Reranker               struct{ Provider, Model string }
-				RagAlpha               float64
-				CandidateTopK, RagTopK int
-				TrackedPaths           []string
-			}
-			if e = json.Unmarshal(b, &saved); e != nil {
-				return nil, e
-			}
-			legacyProviderID = saved.Embedding.Provider
-			cfg.Embedding.Model = saved.Embedding.Model
-			cfg.Embedding.Dimensions = saved.Embedding.Dimensions
-			if saved.CandidateTopK > 0 {
-				cfg.CandidateTopK = saved.CandidateTopK
-			}
-			if saved.RagTopK > 0 {
-				cfg.TopK = saved.RagTopK
-			}
-			if saved.RagAlpha >= 0 && saved.RagAlpha <= 1 {
-				cfg.Alpha = saved.RagAlpha
-			}
-			cfg.TrackedPaths = saved.TrackedPaths
-		} else {
-			cfg, e = model.LoadConfig(path)
-			if e != nil {
-				return nil, e
-			}
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	root, err := workspace.Discover(opts.WorkspaceDir)
+	if err != nil {
 		return nil, err
 	}
-	c := &Core{
-		preparer:          opts.SourcePreparer,
-		autoRefreshStatus: opts.AutoRefreshStatus,
-		sourcePaths:       map[string]string{},
-		root:              root,
-		configPath:        path,
-		cfg:               cfg,
-		legacy:            opts.LegacyReadOnly,
-		legacyProviderID:  legacyProviderID,
-		embedder:          opts.Embedder,
-		reranker:          opts.Reranker,
-		trackedPaths:      append([]string{}, cfg.TrackedPaths...),
-		failedFiles:       []model.FileFailure{},
+	if _, err = model.LoadConfig(filepath.Join(workspace.Store(root), "config.json")); err != nil {
+		return nil, err
 	}
-	if opts.LegacyReadOnly {
-		c.cfg.Embedding, c.legacyContract, c.legacyProviderError = legacyProvider(
-			root, legacyProviderID, cfg.Embedding.Model, cfg.Embedding.Dimensions,
-		)
-		cfg = c.cfg
-	}
-	if !opts.LegacyReadOnly {
-		if e = os.MkdirAll(root, 0700); e != nil {
-			return nil, e
-		}
-		lockPath := filepath.Join(root, ".ragd.lock")
-		c.lock, e = os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
-		if e != nil {
-			return nil, e
-		}
-		if e = syscall.Flock(int(c.lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
-			c.lock.Close()
-			return nil, fmt.Errorf("store is already owned by another writer: %w", e)
-		}
-	}
-	dbPath, e := store.ResolvePath(root)
-	if e != nil {
-		c.Close()
-		return nil, e
-	}
-	if _, e = os.Stat(dbPath); e == nil {
-		if !opts.LegacyReadOnly {
-			probe, probeErr := store.Open(dbPath, true, 0)
-			if probeErr != nil {
-				c.Close()
-				return nil, fmt.Errorf("inspect existing store: %w", probeErr)
-			}
-			version := probe.GetMetadata(context.Background(), "go_storage_version")
-			probe.Close()
-			if version != "1" {
-				c.Close()
-				return nil, errors.New("existing store is not a Go v1 store; use --legacy-readonly or a separate store directory")
-			}
-		}
-		c.db, e = store.Open(dbPath, opts.LegacyReadOnly, cfg.Embedding.Dimensions)
-		if e != nil {
-			c.Close()
-			return nil, e
-		}
-	} else if !errors.Is(e, os.ErrNotExist) || opts.LegacyReadOnly {
-		c.Close()
-		return nil, e
-	}
-	if e = c.loadState(); e != nil {
-		c.Close()
-		return nil, e
-	}
-	if c.embedder == nil && cfg.Embedding.Type != "local" && (!c.legacy || c.legacyProviderError == nil) {
-		c.embedder, e = provider.NewHTTP(cfg.Embedding, cfg.HTTPTimeoutMs, cfg.HTTPMaxRetries, cfg.Indexing.EmbeddingBatchSize)
-		if e != nil {
-			c.Close()
-			return nil, e
-		}
-	}
-	if c.reranker == nil && cfg.Reranker.Type != "none" {
-		c.reranker, e = provider.NewHTTP(cfg.Reranker, cfg.HTTPTimeoutMs, cfg.HTTPMaxRetries, cfg.Indexing.EmbeddingBatchSize)
-		if e != nil {
-			c.Close()
-			return nil, e
-		}
-	}
-	return c, nil
+	opts.WorkspaceDir = root
+	return &Core{opts: opts}, nil
 }
 
-func (c *Core) Close() error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var e error
-	c.closed = true
-	if c.db != nil {
-		e = c.db.Close()
-		c.db = nil
+func (c *Core) Close() error { c.closed.Store(true); return nil }
+
+func (c *Core) ReadOnly() bool { return c.opts.ReadOnly }
+
+func (c *Core) WorkspaceDir() string { return c.opts.WorkspaceDir }
+
+func (c *Core) operation(ctx context.Context, write bool) (*session, error) {
+	if c.closed.Load() {
+		return nil, errors.New("core is closed")
 	}
-	if c.lock != nil {
-		_ = syscall.Flock(int(c.lock.Fd()), syscall.LOCK_UN)
-		_ = c.lock.Close()
-		c.lock = nil
+	if write && c.opts.ReadOnly {
+		return nil, errors.New("workspace is read-only")
 	}
-	return e
+	release, err := workspace.Lock(ctx, c.opts.WorkspaceDir, write)
+	if err != nil {
+		return nil, err
+	}
+	s := &session{workspace: c.opts.WorkspaceDir, root: workspace.Store(c.opts.WorkspaceDir), readOnly: !write, release: release}
+	fail := func(err error) (*session, error) { s.close(); return nil, err }
+	s.cfg, err = model.LoadConfig(filepath.Join(s.root, "config.json"))
+	if err != nil {
+		return fail(err)
+	}
+	s.docs = s.cfg.Documents
+	if !filepath.IsAbs(s.docs) {
+		s.docs = filepath.Join(s.workspace, s.docs)
+	}
+	s.docs = filepath.Clean(s.docs)
+	if within(s.root, s.docs) {
+		return fail(errors.New("documents cannot be inside .rag-go"))
+	}
+	s.state, err = loadState(s.root)
+	if err != nil {
+		return fail(err)
+	}
+	dbPath, err := store.ResolvePath(s.root)
+	if err != nil {
+		return fail(err)
+	}
+	if _, err = os.Stat(dbPath); err == nil {
+		// Inspect before any schema initialization, including writable operations.
+		probe, e := store.Open(dbPath, true, 0)
+		if e != nil {
+			return fail(e)
+		}
+		version := probe.GetMetadata(ctx, "go_storage_version")
+		probe.Close()
+		if ctx.Err() != nil {
+			return fail(ctx.Err())
+		}
+		if version != "1" {
+			return fail(errors.New("existing database is not a recognized Go store; initialize a separate workspace and rebuild"))
+		}
+		s.db, err = store.Open(dbPath, !write, s.cfg.Embedding.Dimensions)
+		if err != nil {
+			return fail(err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fail(err)
+	}
+	credentials, err := workspace.Credentials(s.workspace)
+	if err != nil {
+		return fail(err)
+	}
+	s.embedder, s.reranker = c.opts.Embedder, c.opts.Reranker
+	if s.embedder == nil {
+		p, e := provider.NewHTTP(s.cfg.Embedding, s.cfg.HTTPTimeoutMs, s.cfg.HTTPMaxRetries, s.cfg.Indexing.EmbeddingBatchSize)
+		if e != nil {
+			return fail(e)
+		}
+		p.SetCredential(credentials[s.cfg.Embedding.APIKeyEnv])
+		s.embedder = p
+	}
+	if s.reranker == nil && s.cfg.Reranker.Type != "none" {
+		p, e := provider.NewHTTP(s.cfg.Reranker, s.cfg.HTTPTimeoutMs, s.cfg.HTTPMaxRetries)
+		if e != nil {
+			return fail(e)
+		}
+		p.SetCredential(credentials[s.cfg.Reranker.APIKeyEnv])
+		s.reranker = p
+	}
+	return s, nil
 }
 
-func (c *Core) Config() Config {
-	cfg := c.cfg
-	cfg.TrackedPaths = c.tracked()
-	cfg.ExcludePatterns = append([]string{}, cfg.ExcludePatterns...)
-	return cfg
+func (s *session) close() {
+	if s.db != nil {
+		_ = s.db.Close()
+		s.db = nil
+	}
+	if s.release != nil {
+		s.release()
+		s.release = nil
+	}
 }
 
-func (c *Core) writable() error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.closed {
-		return errors.New("core is closed")
-	}
-	if c.legacy {
-		return errors.New("legacy store is read-only")
+func (s *session) writable() error {
+	if s.readOnly {
+		return errors.New("workspace is read-only")
 	}
 	return nil
 }
 
-func (c *Core) ensureDB() error {
-	c.mu.RLock()
-	closed, exists := c.closed, c.db != nil
-	c.mu.RUnlock()
-	if closed {
-		return errors.New("core is closed")
-	}
-	if exists {
+func (s *session) ensureDB(ctx context.Context) error {
+	if s.db != nil {
 		return nil
 	}
-	if c.legacy {
-		return errors.New("legacy store is read-only")
+	db, err := store.Open(filepath.Join(s.root, "rag.db"), false, s.cfg.Embedding.Dimensions)
+	if err != nil {
+		return err
 	}
-	path := filepath.Join(c.root, "rag.db")
-	db, e := store.Open(path, false, c.cfg.Embedding.Dimensions)
-	if e != nil {
-		return e
-	}
-	c.mu.Lock()
-	c.db = db
-	c.mu.Unlock()
-	return c.stamp(context.Background(), db)
+	s.db = db
+	return s.stamp(ctx, db)
 }
 
 func fingerprint(cfg Config) (string, string) {
@@ -283,82 +200,232 @@ func fingerprint(cfg Config) (string, string) {
 		BaseURL     string
 	}{cfg.Embedding.Type, cfg.Embedding.Model, cfg.Embedding.Dimensions, cfg.Embedding.BaseURL})
 	proc, _ := json.Marshal(struct {
-		Parser   string
-		Search   string
-		Chunking model.ChunkingConfig
+		Parser, Search string
+		Chunking       model.ChunkingConfig
 	}{document.ParserVersion, "han-ngrams-v1", cfg.Chunking})
-	eh := sha256.Sum256(emb)
-	ph := sha256.Sum256(proc)
+	eh, ph := sha256.Sum256(emb), sha256.Sum256(proc)
 	return hex.EncodeToString(eh[:]), hex.EncodeToString(ph[:])
 }
 
-func (c *Core) stamp(ctx context.Context, d *store.DB) error {
-	emb, proc := fingerprint(c.cfg)
-	if e := d.SetMetadata(ctx, "embedding_fingerprint", emb); e != nil {
-		return e
-	}
-	if e := d.SetMetadata(ctx, "processing_fingerprint", proc); e != nil {
-		return e
-	}
-	if e := d.SetMetadata(ctx, "embedding_model", c.cfg.Embedding.Model); e != nil {
-		return e
-	}
-	if e := d.SetMetadata(ctx, "embedding_dimensions", fmt.Sprint(c.cfg.Embedding.Dimensions)); e != nil {
-		return e
-	}
-	return d.SetMetadata(ctx, "go_storage_version", "1")
-}
-
-func (c *Core) compatible(ctx context.Context, d *store.DB) error {
-	if c.legacy {
-		return nil
-	}
-	emb, proc := fingerprint(c.cfg)
-	if got := d.GetMetadata(ctx, "embedding_fingerprint"); got != "" && got != emb {
-		return errors.New("embedding contract changed; rebuild required")
-	}
-	if got := d.GetMetadata(ctx, "processing_fingerprint"); got != "" && got != proc {
-		return errors.New("processing contract changed; rebuild required")
+func (s *session) stamp(ctx context.Context, d *store.DB) error {
+	emb, proc := fingerprint(s.cfg)
+	values := map[string]string{"go_storage_version": "1", "embedding_fingerprint": emb, "processing_fingerprint": proc, "embedding_model": s.cfg.Embedding.Model, "embedding_dimensions": fmt.Sprint(s.cfg.Embedding.Dimensions), "documents_root": s.docs}
+	for k, v := range values {
+		if err := d.SetMetadata(ctx, k, v); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
+func (s *session) compatible(ctx context.Context, d *store.DB) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if d == nil {
+		return nil
+	}
+	emb, proc := fingerprint(s.cfg)
+	actualEmb := d.GetMetadata(ctx, "embedding_fingerprint")
+	actualProc := d.GetMetadata(ctx, "processing_fingerprint")
+	actualDocs := d.GetMetadata(ctx, "documents_root")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if actualEmb != emb {
+		return errors.New("embedding contract changed; rebuild required")
+	}
+	if actualProc != proc {
+		return errors.New("processing contract changed; rebuild required")
+	}
+	if actualDocs != s.docs {
+		return errors.New("documents directory changed; rebuild required")
+	}
+	return ctx.Err()
+}
+
+func (c *Core) Sync(ctx context.Context) (IndexResult, error) { return c.sync(ctx, false) }
+
+func (c *Core) sync(ctx context.Context, automatic bool) (IndexResult, error) {
+	s, err := c.operation(ctx, true)
+	if err != nil {
+		return IndexResult{}, err
+	}
+	defer s.close()
+	if err = s.compatible(ctx, s.db); err != nil {
+		return IndexResult{}, err
+	}
+	snap := s.snapshot(ctx)
+	if ctx.Err() != nil {
+		return IndexResult{}, ctx.Err()
+	}
+	if automatic && !s.needsSync(snap) {
+		return IndexResult{Skipped: len(snap.inputs)}, nil
+	}
+	if automatic && snap.signature == s.state.LastAttemptSignature && len(s.state.FailedFiles) > 0 && time.Since(s.state.LastAttemptAt) < 60*time.Second {
+		r := s.state.LastSync
+		if r == nil {
+			r = &IndexResult{Failures: s.state.FailedFiles, Failed: len(s.state.FailedFiles)}
+		}
+		return *r, errors.New("automatic sync retry is cooling down; run rag sync to retry immediately")
+	}
+	if err = s.ensureDB(ctx); err != nil {
+		return IndexResult{}, err
+	}
+	r := s.indexSnapshot(ctx, s.db, snap, false)
+	// Only a complete, stable scan can remove deleted documents.
+	after := s.snapshot(ctx)
+	if r.Failed == 0 && ctx.Err() == nil && after.signature == snap.signature && len(after.failures) == 0 {
+		indexed, e := s.db.List(ctx)
+		if e != nil {
+			return r, e
+		}
+		for _, path := range indexed {
+			if _, ok := snap.inputs[path]; !ok {
+				if e = s.db.Delete(ctx, path); e != nil {
+					return r, e
+				}
+				r.Removed++
+			}
+		}
+	} else if r.Failed == 0 && ctx.Err() == nil {
+		addFailure(&r, s.docs, "scan", errors.New("documents changed during sync; retry after input settles"))
+	}
+	if err = s.record(snap, r); err != nil {
+		return r, err
+	}
+	if ctx.Err() != nil {
+		return r, ctx.Err()
+	}
+	if r.Failed > 0 {
+		return r, errors.New("sync incomplete; existing documents retained")
+	}
+	return r, nil
+}
+
+func (c *Core) Query(ctx context.Context, text string, opts QueryOptions) (out QueryResult, err error) {
+	started := time.Now()
+	defer func() { out.ElapsedMs = float64(time.Since(started).Microseconds()) / 1000 }()
+	s, err := c.operation(ctx, false)
+	if err != nil {
+		return out, err
+	}
+	if err = validateQuery(s.cfg, text, opts, s.reranker != nil); err != nil {
+		s.close()
+		return out, err
+	}
+	if err = s.compatible(ctx, s.db); err != nil {
+		s.close()
+		return out, err
+	}
+	snap := s.snapshot(ctx)
+	var synced *IndexResult
+	syncError := ""
+	if s.needsSync(snap) && !c.opts.ReadOnly && !opts.DisableSync {
+		s.close()
+		r, e := c.sync(ctx, true)
+		synced = &r
+		if ctx.Err() != nil {
+			return out, ctx.Err()
+		}
+		if e != nil {
+			syncError = e.Error()
+		}
+		s, err = c.operation(ctx, false)
+		if err != nil {
+			return out, err
+		}
+		snap = s.snapshot(ctx)
+	}
+	defer s.close()
+	if ctx.Err() != nil {
+		return out, ctx.Err()
+	}
+	if err = s.compatible(ctx, s.db); err != nil {
+		return out, err
+	}
+	if syncError != "" {
+		if s.db == nil {
+			return out, errors.New(syncError)
+		}
+		stats, e := s.db.Stats(ctx)
+		if e != nil {
+			return out, e
+		}
+		if stats.Files == 0 {
+			return out, errors.New(syncError)
+		}
+	}
+	out, err = s.query(ctx, text, opts)
+	out.Freshness = "fresh"
+	if s.needsSync(snap) {
+		out.Freshness = "stale"
+	}
+	if len(snap.failures) > 0 {
+		out.Freshness = "unknown"
+		if syncError == "" {
+			syncError = snap.failures[0].Error
+		}
+	}
+	out.Sync, out.SyncError = synced, syncError
+	return out, err
+}
+
 func (c *Core) Status(ctx context.Context) (Status, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	paths, failures, progress := c.stateSnapshot()
-	s := Status{StoreDir: c.root, ReadOnly: c.legacy, TrackedPaths: paths, FailedFiles: failures, Progress: progress}
-	if c.autoRefreshStatus != nil {
-		a := c.autoRefreshStatus()
-		s.AutoRefresh = &a
+	s, err := c.operation(ctx, false)
+	if err != nil {
+		return Status{}, err
 	}
-	if c.db == nil {
-		return s, nil
+	defer s.close()
+	status := Status{WorkspaceDir: s.workspace, StoreDir: s.root, DocumentsRoot: s.docs, ReadOnly: c.opts.ReadOnly, FailedFiles: s.state.FailedFiles, LastSync: s.state.LastSync, EmbeddingModel: s.cfg.Embedding.Model, Dimensions: s.cfg.Embedding.Dimensions}
+	if !s.state.LastAttemptAt.IsZero() {
+		status.LastAttemptAt = s.state.LastAttemptAt.UTC().Format(time.RFC3339Nano)
 	}
-	x, e := c.db.Stats(ctx)
-	if e != nil {
-		return s, e
+	if s.db != nil {
+		x, e := s.db.Stats(ctx)
+		if e != nil {
+			return status, e
+		}
+		status.Files, status.Chunks, status.Vectors, status.ActiveDB = x.Files, x.Chunks, x.Vectors, x.ActiveDB
 	}
-	x.StoreDir = c.root
-	x.TrackedPaths = s.TrackedPaths
-	x.FailedFiles = failures
-	x.Progress = progress
-	x.AutoRefresh = s.AutoRefresh
-	if err := c.compatible(ctx, c.db); err != nil {
-		x.NeedsRebuild = true
-		x.RebuildReason = err.Error()
+	if e := s.compatible(ctx, s.db); e != nil {
+		status.NeedsRebuild = true
+		status.RebuildReason = e.Error()
 	}
-	if c.legacy && strings.Contains(c.db.GetMetadata(ctx, "embedding_fingerprint"), `"provider":"local"`) {
-		x.RebuildReason = "local MiniLM vectors require the old model; use explicit bm25 mode"
+	snap := s.snapshot(ctx)
+	status.NeedsSync = s.needsSync(snap)
+	if len(snap.failures) > 0 {
+		status.FreshnessError = snap.failures[0].Error
 	}
-	return x, nil
+	return status, ctx.Err()
 }
 
 func (c *Core) ListDocuments(ctx context.Context) ([]string, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.db == nil {
+	s, err := c.operation(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	defer s.close()
+	if s.db == nil {
 		return []string{}, nil
 	}
-	return c.db.List(ctx)
+	return s.db.List(ctx)
+}
+
+func (c *Core) Cleanup(ctx context.Context, keep int, dryRun bool) (CleanupResult, error) {
+	s, err := c.operation(ctx, true)
+	if err != nil {
+		return CleanupResult{}, err
+	}
+	defer s.close()
+	return s.cleanup(ctx, keep, dryRun)
+}
+
+func (c *Core) Rebuild(ctx context.Context) (IndexResult, error) {
+	s, err := c.operation(ctx, true)
+	if err != nil {
+		return IndexResult{}, err
+	}
+	defer s.close()
+	return s.rebuild(ctx)
 }

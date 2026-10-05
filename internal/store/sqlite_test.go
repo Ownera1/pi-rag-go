@@ -8,7 +8,7 @@ import (
 	"github.com/Ownera1/rag-go/internal/model"
 )
 
-func TestSourceMetadataReplacementAndLegacyReadOnly(t *testing.T) {
+func TestSourceMetadataReplacementAndReadOnly(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "rag.db")
 	db, err := Open(path, false, 2)
@@ -36,22 +36,44 @@ func TestSourceMetadataReplacementAndLegacyReadOnly(t *testing.T) {
 	if err := db.SQL.QueryRow("SELECT count(*) FROM chunk_sources").Scan(&count); err != nil || count != 1 {
 		t.Fatalf("stale metadata retained: %d err=%v", count, err)
 	}
-	if _, err := db.SQL.Exec("DROP TABLE chunk_sources"); err != nil {
-		t.Fatal(err)
-	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := Open(path, true, 2)
+	reader, err := Open(path, true, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer legacy.Close()
-	if err := legacy.SQL.QueryRow("SELECT rowid FROM chunks").Scan(&row); err != nil {
+	defer reader.Close()
+	if err := reader.SQL.QueryRow("SELECT rowid FROM chunks").Scan(&row); err != nil {
 		t.Fatal(err)
 	}
-	got, err = legacy.Chunks(ctx, []int64{row})
-	if err != nil || got[row].Content != "known evidence" || got[row].SourcePath != "" {
-		t.Fatalf("legacy query required new schema: %+v err=%v", got, err)
+	got, err = reader.Chunks(ctx, []int64{row})
+	if err != nil || got[row].Content != "known evidence" || got[row].SourcePath != "original.pdf" {
+		t.Fatalf("reader query required new schema: %+v err=%v", got, err)
+	}
+}
+
+func TestReplacementRollsBackAllArtifactsOnFailure(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(filepath.Join(t.TempDir(), "rag.db"), false, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	doc := model.Document{ID: "paper", Path: "old.md", Hash: "old"}
+	chunks := []model.Chunk{{ID: "one", Content: "old evidence"}}
+	if err = db.Replace(ctx, doc, chunks, [][]float32{{1, 0}}); err != nil {
+		t.Fatal(err)
+	}
+	doc.Path = "new.json"
+	doc.Hash = "new"
+	doc.Replaces = []string{"old.md"}
+	bad := []model.Chunk{{ID: "duplicate", Content: "a"}, {ID: "duplicate", Content: "b"}}
+	if err = db.Replace(ctx, doc, bad, [][]float32{{1, 0}, {1, 0}}); err == nil {
+		t.Fatal("expected insertion failure")
+	}
+	paths, err := db.List(ctx)
+	if err != nil || len(paths) != 1 || paths[0] != "old.md" {
+		t.Fatalf("rollback: %v %v", paths, err)
 	}
 }

@@ -2,12 +2,9 @@ package mcpserver
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -15,10 +12,10 @@ import (
 )
 
 func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "rag-go", Version: "0.1.0"}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "rag-go", Version: "0.2.0"}, nil)
 	if len(lifecycle) > 0 {
 		// Stateful MCP sessions detach tool contexts from the initiating HTTP
-		// request. Tie each call to the resident service's lifetime explicitly.
+		// request. Tie each call to this MCP process's lifetime explicitly.
 		service := lifecycle[0]
 		s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 			return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
@@ -39,15 +36,18 @@ func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 		CandidateTopK int      `json:"candidate_top_k,omitempty"`
 		Alpha         *float64 `json:"alpha,omitempty"`
 		Mode          string   `json:"mode,omitempty"`
+		DisableSync   bool     `json:"disable_sync,omitempty"`
 		DisableRerank bool     `json:"disable_rerank,omitempty"`
 		RequireRerank bool     `json:"require_rerank,omitempty"`
 	}
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "rag_query",
-		Description: "Search the shared knowledge store and return structured source hits",
+		Description: "Search this workspace; local queries synchronize changed documents unless disable_sync=true",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: core.ReadOnly()},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in queryIn) (*mcp.CallToolResult, rag.QueryResult, error) {
 		r, e := core.Query(ctx, in.Query, rag.QueryOptions{
+			DisableSync:   in.DisableSync,
 			TopK:          in.TopK,
 			CandidateTopK: in.CandidateTopK,
 			Alpha:         in.Alpha,
@@ -58,36 +58,13 @@ func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 		return nil, r, e
 	})
 
-	type indexIn struct {
-		Paths []string `json:"paths"`
-	}
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "rag_index",
-		Description: "Index files or directories and track them for refresh",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in indexIn) (*mcp.CallToolResult, rag.IndexResult, error) {
-		r, e := core.Index(ctx, in.Paths)
-		return nil, r, e
-	})
-
 	type empty struct{}
-	mcp.AddTool(s, &mcp.Tool{Name: "rag_remove", Description: "Untrack registered roots and remove their exclusive index entries; original files are retained"}, func(ctx context.Context, _ *mcp.CallToolRequest, in indexIn) (*mcp.CallToolResult, rag.RemoveResult, error) {
-		r, e := core.Remove(ctx, in.Paths)
-		return nil, r, e
-	})
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "rag_status",
-		Description: "Show store and index status without triggering model calls",
+		Description: "Show workspace and index status without triggering model calls",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.Status, error) {
 		r, e := core.Status(ctx)
-		return nil, r, e
-	})
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "rag_refresh",
-		Description: "Rescan tracked paths and update changed documents",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.IndexResult, error) {
-		r, e := core.Refresh(ctx)
 		return nil, r, e
 	})
 
@@ -97,52 +74,39 @@ func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "rag_list_documents",
-		Description: "List indexed source paths",
+		Description: "List indexed canonical document paths",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, listOut, error) {
 		r, e := core.ListDocuments(ctx)
 		return nil, listOut{r}, e
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "rag_rebuild",
-		Description: "Build a new generation from tracked paths and atomically publish it",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.IndexResult, error) {
-		r, e := core.Rebuild(ctx)
-		return nil, r, e
-	})
-
-	type clearIn struct {
-		Confirm bool `json:"confirm"`
-	}
-	type clearOut struct {
-		Cleared bool `json:"cleared"`
-	}
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "rag_clear",
-		Description: "Publish an empty index while retaining tracked paths and old generations; requires confirm=true",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in clearIn) (*mcp.CallToolResult, clearOut, error) {
-		if !in.Confirm {
-			return nil, clearOut{}, errors.New("confirm=true is required")
-		}
-		e := core.Clear(ctx)
-		return nil, clearOut{e == nil}, e
-	})
-	type cleanupIn struct {
-		Keep    int  `json:"keep,omitempty"`
-		DryRun  bool `json:"dry_run,omitempty"`
-		Confirm bool `json:"confirm,omitempty"`
-	}
-	mcp.AddTool(s, &mcp.Tool{Name: "rag_cleanup", Description: "Preview or remove inactive Go index generations; active index is always retained; deletion requires confirm=true"},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in cleanupIn) (*mcp.CallToolResult, rag.CleanupResult, error) {
-			keep := in.Keep
-			if keep == 0 {
-				keep = 3
-			}
-			r, err := core.Cleanup(ctx, keep, in.DryRun || !in.Confirm)
-			return nil, r, err
+	if !core.ReadOnly() {
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        "rag_sync",
+			Description: "Synchronize this workspace documents directory",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.IndexResult, error) {
+			r, e := core.Sync(ctx)
+			return indexResponse(r, e)
 		})
+
+		mcp.AddTool(s, &mcp.Tool{
+			Name:        "rag_rebuild",
+			Description: "Build a new generation from workspace documents and atomically publish it",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.IndexResult, error) {
+			r, e := core.Rebuild(ctx)
+			return indexResponse(r, e)
+		})
+
+	}
 	return s
+}
+
+func indexResponse(r rag.IndexResult, err error) (*mcp.CallToolResult, rag.IndexResult, error) {
+	if err != nil {
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, r, nil
+	}
+	return nil, r, nil
 }
 
 func Handler(s *mcp.Server) http.Handler {
@@ -169,39 +133,4 @@ func Handler(s *mcp.Server) http.Handler {
 		}
 		base.ServeHTTP(w, r)
 	})
-}
-
-func Proxy(ctx context.Context, endpoint string) error {
-	return proxy(ctx, endpoint, &mcp.StdioTransport{})
-}
-
-func proxy(ctx context.Context, endpoint string, transport mcp.Transport) error {
-	client := mcp.NewClient(&mcp.Implementation{Name: "rag-go-stdio", Version: "0.1.0"}, nil)
-	remote, e := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint, DisableStandaloneSSE: true}, nil)
-	if e != nil {
-		return fmt.Errorf("connect to ragd: %w", e)
-	}
-	defer remote.Close()
-	tools, e := remote.ListTools(ctx, nil)
-	if e != nil {
-		return e
-	}
-	server := mcp.NewServer(&mcp.Implementation{Name: "rag-go-stdio", Version: "0.1.0"}, nil)
-	for _, t := range tools.Tools {
-		tool := t
-		server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return remote.CallTool(ctx, &mcp.CallToolParams{Name: tool.Name, Arguments: req.Params.Arguments})
-		})
-	}
-	if len(tools.Tools) == 0 {
-		return errors.New("remote MCP server has no tools")
-	}
-	return server.Run(ctx, transport)
-}
-
-func Endpoint(addr string) string {
-	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
-		return strings.TrimRight(addr, "/")
-	}
-	return "http://" + addr + "/mcp"
 }

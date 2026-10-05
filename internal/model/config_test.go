@@ -34,3 +34,15 @@ func TestConfigRejectsInvalidThresholdsAndConcurrency(t *testing.T) {
 		}
 	}
 }
+
+func TestMalformedWorkspaceConfigIsRejected(t *testing.T) {
+	for _, input := range []string{"null", "[]", "{} {}", `{"trackedPaths":[]}`, `{"documents":""}`} {
+		p := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(p, []byte(input), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(p); err == nil {
+			t.Fatalf("accepted malformed configuration: %s", input)
+		}
+	}
+}

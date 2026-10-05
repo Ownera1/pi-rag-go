@@ -2,9 +2,7 @@ package rag
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"net"
 	"sort"
@@ -85,15 +83,10 @@ func transient(err error) bool {
 		strings.Contains(s, "no such host")
 }
 
-func (c *Core) Query(ctx context.Context, query string, opts QueryOptions) (out QueryResult, err error) {
+func (c *session) query(ctx context.Context, query string, opts QueryOptions) (out QueryResult, err error) {
 	started := time.Now()
 	defer func() { out.ElapsedMs = float64(time.Since(started).Microseconds()) / 1000 }()
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	out = QueryResult{Query: query, Hits: []model.Hit{}, Method: "hybrid"}
-	if c.closed {
-		return out, errors.New("core is closed")
-	}
 	if err := ctx.Err(); err != nil {
 		return out, err
 	}
@@ -139,31 +132,12 @@ func (c *Core) Query(ctx context.Context, query string, opts QueryOptions) (out 
 	if err := c.compatible(ctx, c.db); err != nil {
 		return out, err
 	}
-	if c.legacy && mode != "bm25" {
-		raw := c.db.GetMetadata(ctx, "embedding_fingerprint")
-		var fp struct {
-			Provider         string `json:"provider"`
-			Model            string `json:"model"`
-			Dimensions       int    `json:"dimensions"`
-			ProviderContract string `json:"providerContract"`
-			Contract         string `json:"contract"`
-		}
-		if err := json.Unmarshal([]byte(raw), &fp); err != nil {
-			return out, errors.New("legacy embedding fingerprint missing; use bm25 or rebuild")
-		}
-		if fp.Provider == "local" {
-			return out, errors.New("legacy MiniLM vectors require the original model; use explicit bm25 mode")
-		}
-		if c.legacyProviderError != nil {
-			return out, fmt.Errorf("legacy vector provider unavailable: %w; use bm25", c.legacyProviderError)
-		}
-		if fp.Provider != c.legacyProviderID ||
-			fp.Model != c.cfg.Embedding.Model ||
-			fp.Dimensions != c.cfg.Embedding.Dimensions ||
-			fp.Contract != "l2-unit-v1" ||
-			(fp.ProviderContract != "" && fp.ProviderContract != c.legacyContract) {
-			return out, errors.New("legacy embedding contract does not match configured provider")
-		}
+	stats, err := c.db.Stats(ctx)
+	if err != nil {
+		return out, err
+	}
+	if stats.Chunks == 0 {
+		return out, nil
 	}
 	recall := topK
 	if reranker != nil {
@@ -175,7 +149,7 @@ func (c *Core) Query(ctx context.Context, query string, opts QueryOptions) (out 
 		if err != nil {
 			return out, err
 		}
-		if hanQuery, hasHan := searchtext.Query(query); hasHan && !c.legacy {
+		if hanQuery, hasHan := searchtext.Query(query); hasHan {
 			fts, err = c.db.FTSHan(ctx, hanQuery, 200)
 			if err != nil {
 				return out, err
@@ -208,9 +182,7 @@ func (c *Core) Query(ctx context.Context, query string, opts QueryOptions) (out 
 		}
 	} else {
 		out.Method = "bm25"
-		if c.legacy && strings.Contains(c.db.GetMetadata(ctx, "embedding_fingerprint"), `"provider":"local"`) {
-			out.Degraded = "legacy local MiniLM vectors unavailable; explicit BM25 query"
-		}
+
 	}
 	bm := normalizeBM25(fts)
 	vnorm := normalizeVector(vec)
@@ -311,4 +283,30 @@ func (c *Core) Query(ctx context.Context, query string, opts QueryOptions) (out 
 	}
 	out.Hits = hits
 	return out, nil
+}
+
+func validateQuery(cfg Config, text string, opts QueryOptions, hasReranker bool) error {
+	if strings.TrimSpace(text) == "" {
+		return errors.New("query is required")
+	}
+	top, candidate := opts.TopK, opts.CandidateTopK
+	if top == 0 {
+		top = cfg.TopK
+	}
+	if candidate == 0 {
+		candidate = cfg.CandidateTopK
+	}
+	if top < 1 || top > 200 || candidate < top || candidate > 200 {
+		return errors.New("invalid top_k/candidate_top_k")
+	}
+	if opts.Alpha != nil && (math.IsNaN(*opts.Alpha) || *opts.Alpha < 0 || *opts.Alpha > 1) {
+		return errors.New("alpha must be in [0,1]")
+	}
+	if opts.Mode != "" && opts.Mode != "bm25" && opts.Mode != "vector" && opts.Mode != "hybrid" {
+		return errors.New("mode must be hybrid, vector or bm25")
+	}
+	if opts.RequireRerank && (!hasReranker || opts.DisableRerank) {
+		return errors.New("reranker required but unavailable")
+	}
+	return nil
 }
