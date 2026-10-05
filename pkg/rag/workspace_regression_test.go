@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Ownera1/rag-go/internal/store"
 	"github.com/Ownera1/rag-go/internal/workspace"
 )
 
@@ -172,5 +173,39 @@ func TestCanonicalArtifactRemovalRetiresOldRepresentationOnPartialFailure(t *tes
 	files, err := c.ListDocuments(context.Background())
 	if err != nil || len(files) != 1 || files[0] != docPath(c, "paper/full.md") {
 		t.Fatalf("canonical paths: %v %v", files, err)
+	}
+}
+
+func TestInitialDatabaseStampCancellationCanRetryAndMetadataIsAtomic(t *testing.T) {
+	c := openTest(t, t.TempDir(), fakeEmbedding{})
+	defer c.Close()
+	s := &session{root: workspace.Store(c.WorkspaceDir()), docs: filepath.Dir(docPath(c, "note.txt")), cfg: DefaultConfig()}
+	s.cfg.Embedding.Dimensions = 2
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.ensureDB(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(s.root, "rag.db")); !os.IsNotExist(err) || s.db != nil {
+		t.Fatal("canceled initial stamp left a partial store")
+	}
+	sourceFile(t, docPath(c, "note.txt"), []byte("retry evidence"))
+	if _, err := c.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(filepath.Join(t.TempDir(), "rag.db"), false, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err = db.SQL.Exec(`CREATE TRIGGER fail_stamp BEFORE INSERT ON metadata WHEN NEW.key='embedding_dimensions' BEGIN SELECT RAISE(ABORT, 'stamp failure'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.stamp(context.Background(), db); err == nil {
+		t.Fatal("failed stamp succeeded")
+	}
+	var count int
+	if err = db.SQL.QueryRow("SELECT COUNT(*) FROM metadata").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("partial metadata: %d %v", count, err)
 	}
 }

@@ -6,7 +6,7 @@ Verified on 2026-10-06, macOS arm64 with Go 1.27.1, on `codex/workspace-rag-simp
 | --- | --- |
 | Workspace | Current-directory initialization, upward discovery, explicit roots, nested isolation, external documents, repeat initialization, damaged config and unknown database rejection |
 | Incremental sync | Add/change/delete, unchanged inputs with zero embedding, content and manifest changes, canonical artifact switches in both directions, partial failures and inaccessible source retention |
-| In-flight inputs | Changes during embedding and canceled synchronization retain the previous document; later manual sync repairs it |
+| In-flight inputs | Changes during embedding and canceled synchronization retain the previous document; later manual sync repairs it; canceled initial database stamping can retry and metadata publication is transactional |
 | Credentials | Private credential permissions, concurrent workspace isolation, environment priority and no process environment mutation |
 | Processes | Three simultaneous sync processes issue one embedding request; parallel readers share locks; waiting writers cancel; an already-open peer reads the newly published generation after rebuild/clean |
 | MCP | Actual extracted binary over stdio and streamable HTTP; five local tools, three read-only tools, rejected writes, no automatic sync in read-only mode, clean protocol stdout and Host/Origin rejection |

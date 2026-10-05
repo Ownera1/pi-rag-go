@@ -190,7 +190,19 @@ func (s *session) ensureDB(ctx context.Context) error {
 		return err
 	}
 	s.db = db
-	return s.stamp(ctx, db)
+	if err = s.stamp(ctx, db); err != nil {
+		// This database did not exist when the exclusive operation began. A
+		// canceled initial stamp must not leave an unrecognized partial store.
+		_ = db.Close()
+		s.db = nil
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			if e := os.Remove(db.Path + suffix); e != nil && !errors.Is(e, os.ErrNotExist) {
+				err = errors.Join(err, e)
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 func fingerprint(cfg Config) (string, string) {
@@ -210,12 +222,17 @@ func fingerprint(cfg Config) (string, string) {
 func (s *session) stamp(ctx context.Context, d *store.DB) error {
 	emb, proc := fingerprint(s.cfg)
 	values := map[string]string{"go_storage_version": "1", "embedding_fingerprint": emb, "processing_fingerprint": proc, "embedding_model": s.cfg.Embedding.Model, "embedding_dimensions": fmt.Sprint(s.cfg.Embedding.Dimensions), "documents_root": s.docs}
+	tx, err := d.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for k, v := range values {
-		if err := d.SetMetadata(ctx, k, v); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO metadata(key,value) VALUES(?,?)", k, v); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *session) compatible(ctx context.Context, d *store.DB) error {
