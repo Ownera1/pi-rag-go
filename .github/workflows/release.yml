@@ -101,18 +101,18 @@ jobs:
       - name: Verify complete release and prepare Cask
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
         run: |
-          test -n "$TAP_TOKEN" || { echo 'Configure HOMEBREW_TAP_TOKEN before tagging a release'; exit 1; }
+          test -n "$TAP_KEY" || { echo 'Configure HOMEBREW_TAP_SSH_KEY before tagging a release'; exit 1; }
           cat dist/*.sha256 | sort -k2 > dist/checksums.txt
           (cd dist && sha256sum -c checksums.txt)
           python3 scripts/generate-cask.py "$RELEASE_TAG" dist/checksums.txt generated/rag-go.rb
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: Ownera1/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          ssh-key: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
           path: tap
-          persist-credentials: false
+          persist-credentials: true
       - name: Publish verified release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -128,10 +128,8 @@ jobs:
       - name: Update Homebrew Tap
         if: ${{ !contains(github.ref_name, '-') }}
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh auth setup-git
           mkdir -p tap/Casks
           cp generated/rag-go.rb tap/Casks/rag-go.rb
           git -C tap add Casks/rag-go.rb
