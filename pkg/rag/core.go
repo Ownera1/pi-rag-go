@@ -35,18 +35,25 @@ type IndexingConfig = model.IndexingConfig
 type FileFailure = model.FileFailure
 type Progress = model.Progress
 type CleanupResult = model.CleanupResult
+type AutoRefreshStatus = model.AutoRefreshStatus
+type RemoveResult = model.RemoveResult
 type EmbeddingProvider = model.EmbeddingProvider
 type Reranker = model.Reranker
 
 type Options struct {
-	StoreDir       string
-	ConfigPath     string
-	LegacyReadOnly bool
-	Embedder       EmbeddingProvider
-	Reranker       Reranker
+	SourcePreparer    SourcePreparer
+	AutoRefreshStatus func() AutoRefreshStatus
+	StoreDir          string
+	ConfigPath        string
+	LegacyReadOnly    bool
+	Embedder          EmbeddingProvider
+	Reranker          Reranker
 }
 
 type Core struct {
+	preparer            SourcePreparer
+	autoRefreshStatus   func() AutoRefreshStatus
+	sourcePaths         map[string]string
 	root                string
 	configPath          string
 	cfg                 Config
@@ -125,15 +132,18 @@ func Open(opts Options) (*Core, error) {
 		return nil, err
 	}
 	c := &Core{
-		root:             root,
-		configPath:       path,
-		cfg:              cfg,
-		legacy:           opts.LegacyReadOnly,
-		legacyProviderID: legacyProviderID,
-		embedder:         opts.Embedder,
-		reranker:         opts.Reranker,
-		trackedPaths:     append([]string{}, cfg.TrackedPaths...),
-		failedFiles:      []model.FileFailure{},
+		preparer:          opts.SourcePreparer,
+		autoRefreshStatus: opts.AutoRefreshStatus,
+		sourcePaths:       map[string]string{},
+		root:              root,
+		configPath:        path,
+		cfg:               cfg,
+		legacy:            opts.LegacyReadOnly,
+		legacyProviderID:  legacyProviderID,
+		embedder:          opts.Embedder,
+		reranker:          opts.Reranker,
+		trackedPaths:      append([]string{}, cfg.TrackedPaths...),
+		failedFiles:       []model.FileFailure{},
 	}
 	if opts.LegacyReadOnly {
 		c.cfg.Embedding, c.legacyContract, c.legacyProviderError = legacyProvider(
@@ -318,6 +328,10 @@ func (c *Core) Status(ctx context.Context) (Status, error) {
 	defer c.mu.RUnlock()
 	paths, failures, progress := c.stateSnapshot()
 	s := Status{StoreDir: c.root, ReadOnly: c.legacy, TrackedPaths: paths, FailedFiles: failures, Progress: progress}
+	if c.autoRefreshStatus != nil {
+		a := c.autoRefreshStatus()
+		s.AutoRefresh = &a
+	}
 	if c.db == nil {
 		return s, nil
 	}
@@ -329,6 +343,7 @@ func (c *Core) Status(ctx context.Context) (Status, error) {
 	x.TrackedPaths = s.TrackedPaths
 	x.FailedFiles = failures
 	x.Progress = progress
+	x.AutoRefresh = s.AutoRefresh
 	if err := c.compatible(ctx, c.db); err != nil {
 		x.NeedsRebuild = true
 		x.RebuildReason = err.Error()

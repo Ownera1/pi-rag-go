@@ -34,7 +34,7 @@ func TestHTTPClientCanCallStatus(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(tools.Tools) != 8 {
+	if len(tools.Tools) != 9 {
 		t.Fatalf("got %d tools", len(tools.Tools))
 	}
 	result, e := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "rag_status", Arguments: map[string]any{}})
@@ -134,7 +134,7 @@ func TestProxyForwardsRemoteTools(t *testing.T) {
 	}
 	defer session.Close()
 	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 8 {
+	if err != nil || len(tools.Tools) != 9 {
 		t.Fatalf("proxy tools=%+v err=%v", tools, err)
 	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "rag_status", Arguments: map[string]any{}})

@@ -8,9 +8,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"time"
 
+	"github.com/Ownera1/rag-go/internal/daemon"
 	"github.com/Ownera1/rag-go/internal/mcpserver"
+	"github.com/Ownera1/rag-go/internal/model"
 	"github.com/Ownera1/rag-go/pkg/rag"
 )
 
@@ -39,10 +42,16 @@ func Serve(ctx context.Context, args []string, stderr io.Writer) error {
 	if *store == "" {
 		return fmt.Errorf("--store is required")
 	}
+	absStore, e := filepath.Abs(*store)
+	if e != nil {
+		return e
+	}
+	*store = absStore
 	if e := applyCredentials(*store); e != nil {
 		return e
 	}
-	if cfg, e := settingsForDaemon(*store, *config, *legacy); e != nil {
+	cfg, e := settingsForDaemon(*store, *config, *legacy)
+	if e != nil {
 		return e
 	} else {
 		explicit := false
@@ -65,11 +74,32 @@ func Serve(ctx context.Context, args []string, stderr io.Writer) error {
 			return fmt.Errorf("--listen must use a loopback address")
 		}
 	}
-	core, e := rag.Open(rag.Options{StoreDir: *store, ConfigPath: *config, LegacyReadOnly: *legacy})
+	var automatic *daemon.Watcher
+	var preparer rag.SourcePreparer
+	if !*legacy && cfg.Runtime.PDF.Backend != "" {
+		preparer = &daemon.PDFPreparer{Store: *store, Config: cfg.Runtime.PDF}
+	}
+	core, e := rag.Open(rag.Options{StoreDir: *store, ConfigPath: *config, LegacyReadOnly: *legacy, SourcePreparer: preparer, AutoRefreshStatus: func() model.AutoRefreshStatus {
+		if automatic != nil {
+			return automatic.Status()
+		}
+		return model.AutoRefreshStatus{}
+	}})
 	if e != nil {
 		return e
 	}
 	defer core.Close()
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	if !*legacy && cfg.Runtime.AutoRefresh.Enabled {
+		automatic = daemon.NewWatcher(core, *store, cfg.Runtime.AutoRefresh)
+		go automatic.Run(watchCtx)
+	}
+	defer func() {
+		stopWatch()
+		if automatic != nil {
+			automatic.Wait()
+		}
+	}()
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcpserver.Handler(mcpserver.New(core, ctx)))
 	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}

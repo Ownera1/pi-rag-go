@@ -71,6 +71,10 @@ func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 	})
 
 	type empty struct{}
+	mcp.AddTool(s, &mcp.Tool{Name: "rag_remove", Description: "Untrack registered roots and remove their exclusive index entries; original files are retained"}, func(ctx context.Context, _ *mcp.CallToolRequest, in indexIn) (*mcp.CallToolResult, rag.RemoveResult, error) {
+		r, e := core.Remove(ctx, in.Paths)
+		return nil, r, e
+	})
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "rag_status",
 		Description: "Show store and index status without triggering model calls",

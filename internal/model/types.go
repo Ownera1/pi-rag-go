@@ -76,9 +76,10 @@ type QueryUsage struct {
 }
 
 type FileFailure struct {
-	Path  string `json:"path"`
-	Stage string `json:"stage"`
-	Error string `json:"error"`
+	Retryable bool   `json:"retryable,omitempty"`
+	Path      string `json:"path"`
+	Stage     string `json:"stage"`
+	Error     string `json:"error"`
 }
 
 type Progress struct {
@@ -113,19 +114,32 @@ type IndexResult struct {
 }
 
 type Status struct {
-	StoreDir       string        `json:"storeDir"`
-	ReadOnly       bool          `json:"readOnly"`
-	Files          int           `json:"files"`
-	Chunks         int           `json:"chunks"`
-	Vectors        int           `json:"vectors"`
-	EmbeddingModel string        `json:"embeddingModel"`
-	Dimensions     int           `json:"dimensions"`
-	NeedsRebuild   bool          `json:"needsRebuild"`
-	RebuildReason  string        `json:"rebuildReason,omitempty"`
-	ActiveDB       string        `json:"activeDb"`
-	TrackedPaths   []string      `json:"trackedPaths"`
-	FailedFiles    []FileFailure `json:"failedFiles"`
-	Progress       Progress      `json:"progress"`
+	AutoRefresh    *AutoRefreshStatus `json:"autoRefresh,omitempty"`
+	StoreDir       string             `json:"storeDir"`
+	ReadOnly       bool               `json:"readOnly"`
+	Files          int                `json:"files"`
+	Chunks         int                `json:"chunks"`
+	Vectors        int                `json:"vectors"`
+	EmbeddingModel string             `json:"embeddingModel"`
+	Dimensions     int                `json:"dimensions"`
+	NeedsRebuild   bool               `json:"needsRebuild"`
+	RebuildReason  string             `json:"rebuildReason,omitempty"`
+	ActiveDB       string             `json:"activeDb"`
+	TrackedPaths   []string           `json:"trackedPaths"`
+	FailedFiles    []FileFailure      `json:"failedFiles"`
+	Progress       Progress           `json:"progress"`
+}
+
+type AutoRefreshStatus struct {
+	Enabled         bool   `json:"enabled"`
+	Pending         int    `json:"pending"`
+	Running         bool   `json:"running"`
+	LastCompletedAt string `json:"lastCompletedAt,omitempty"`
+	LastError       string `json:"lastError,omitempty"`
+}
+type RemoveResult struct {
+	UntrackedPaths   []string `json:"untrackedPaths"`
+	RemovedDocuments int      `json:"removedDocuments"`
 }
 
 type ProviderConfig struct {

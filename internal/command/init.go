@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/Ownera1/rag-go/internal/provider"
@@ -82,6 +83,53 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, errout io
 	}
 	if fresh {
 		if interactive {
+			explicit := map[string]bool{}
+			fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+			if !explicit["embedding-type"] {
+				*embedding, err = ask("Embedding provider (voyage/openai)", *embedding)
+				if err != nil {
+					return err
+				}
+			}
+			if *embedding == "openai" {
+				if !explicit["model"] {
+					*modelName = ""
+				}
+				if !explicit["base-url"] {
+					*base = ""
+				}
+				if !explicit["api-key-env"] {
+					*keyEnv = ""
+				}
+			}
+			if !explicit["model"] {
+				*modelName, err = ask("Exact embedding model", *modelName)
+				if err != nil {
+					return err
+				}
+			}
+			if !explicit["dimensions"] {
+				s, e := ask("Embedding dimensions", strconv.Itoa(*dimensions))
+				if e != nil {
+					return e
+				}
+				*dimensions, err = strconv.Atoi(s)
+				if err != nil {
+					return err
+				}
+			}
+			if !explicit["base-url"] {
+				*base, err = ask("Embedding API prefix", *base)
+				if err != nil {
+					return err
+				}
+			}
+			if !explicit["api-key-env"] {
+				*keyEnv, err = ask("Credential environment name (empty for no authentication)", *keyEnv)
+				if err != nil {
+					return err
+				}
+			}
 			if *backend == "" {
 				*backend, err = ask("PDF backend (pdftotext/grobid/mineru)", "pdftotext")
 				if err != nil {

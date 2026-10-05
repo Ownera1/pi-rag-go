@@ -32,6 +32,25 @@ func ReorderFlags(args []string, booleans map[string]bool) []string {
 }
 
 func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer) error {
+	if len(args) > 0 && args[0] == "--version" {
+		args = []string{"version"}
+	}
+	if len(args) > 0 && strings.HasPrefix(args[0], "-") && args[0] != "--help" && args[0] != "-h" {
+		i := 0
+		for i < len(args) && strings.HasPrefix(args[i], "-") {
+			if strings.Contains(args[i], "=") {
+				i++
+			} else {
+				i += 2
+			}
+		}
+		if i >= len(args) {
+			return errors.New("a subcommand is required")
+		}
+		prefix := append([]string{}, args[:i]...)
+		args = append([]string{args[i]}, append(prefix, args[i+1:]...)...)
+	}
+
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(out, "usage: rag init|serve|stdio|add|index|remove|query|status|refresh|rebuild|list|clear|cleanup|connect|service|prep|eval|version [options]")
 		return nil
@@ -53,6 +72,10 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 	store := DefaultStore()
 	filtered := []string{}
 	for i := 0; i < len(rest); i++ {
+		if rest[i] == "--" {
+			filtered = append(filtered, rest[i:]...)
+			break
+		}
 		if rest[i] == "--store" {
 			if i+1 == len(rest) {
 				return errors.New("--store requires a value")
@@ -66,6 +89,13 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		}
 	}
 	rest = filtered
+	if cmd == "stdio" {
+		endpoint, e := endpointFor(store)
+		if e != nil {
+			return e
+		}
+		rest = append([]string{"--endpoint", endpoint}, rest...)
+	}
 	if cmd == "serve" || cmd == "stdio" {
 		return Serve(ctx, append([]string{cmd, "--store", store}, rest...), errout)
 	}
@@ -88,7 +118,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 	rest = ReorderFlags(rest, booleans)
 	// All control options precede the legacy positional command.
 	boundary := 0
-	for boundary < len(rest) && strings.HasPrefix(rest[boundary], "-") {
+	for boundary < len(rest) && strings.HasPrefix(rest[boundary], "-") && rest[boundary] != "--" {
 		a := rest[boundary]
 		boundary++
 		name := strings.TrimLeft(strings.SplitN(a, "=", 2)[0], "-")
@@ -98,6 +128,9 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 	}
 	ctl := append([]string{"--endpoint", endpoint}, rest[:boundary]...)
 	ctl = append(ctl, cmd)
+	if boundary < len(rest) && rest[boundary] == "--" {
+		boundary++
+	}
 	ctl = append(ctl, rest[boundary:]...)
 	return Control(ctx, ctl, out, errout)
 }

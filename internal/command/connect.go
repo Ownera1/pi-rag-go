@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -17,7 +18,10 @@ type executor func(context.Context, string, ...string) ([]byte, error)
 func external(ctx context.Context, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	// Inspect personal registrations from a neutral directory, avoiding project overrides.
+	cmd.Dir, _ = os.UserHomeDir()
+	return cmd.CombinedOutput()
 }
 
 func Connect(ctx context.Context, args []string, endpoint string, out, stderr io.Writer) error {

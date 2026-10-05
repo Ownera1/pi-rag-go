@@ -115,7 +115,11 @@ func (m serviceManager) action(ctx context.Context, verb string) error {
 		job := domain + "/" + serviceLabel
 		switch verb {
 		case "start":
-			args = []string{"bootstrap", domain, m.path()}
+			if _, e := m.execute(ctx, tool, "print", job); e == nil {
+				args = []string{"kickstart", job}
+			} else {
+				args = []string{"bootstrap", domain, m.path()}
+			}
 		case "stop":
 			args = []string{"bootout", job}
 		case "restart":
@@ -139,6 +143,38 @@ func (m serviceManager) action(ctx context.Context, verb string) error {
 	}
 	_, err := m.execute(ctx, tool, args...)
 	return err
+}
+
+func (m serviceManager) state(ctx context.Context) string {
+	if m.platform == "linux" {
+		b, e := m.execute(ctx, "systemctl", "--user", "show", "rag-go.service", "--property=ActiveState", "--value")
+		if e != nil {
+			return "failed"
+		}
+		switch strings.TrimSpace(string(b)) {
+		case "active":
+			return "running"
+		case "failed":
+			return "failed"
+		case "activating":
+			return "starting"
+		default:
+			return "stopped"
+		}
+	}
+	domain := "gui/" + strconv.Itoa(os.Getuid()) + "/" + serviceLabel
+	b, e := m.execute(ctx, "launchctl", "print", domain)
+	if e != nil {
+		return "stopped"
+	}
+	s := string(b)
+	if strings.Contains(s, "state = running") || strings.Contains(s, "pid = ") {
+		return "running"
+	}
+	if strings.Contains(s, "last exit code = ") && !strings.Contains(s, "last exit code = 0") {
+		return "failed"
+	}
+	return "stopped"
 }
 
 func (m serviceManager) ready(ctx context.Context, endpoint, store string) error {
@@ -203,8 +239,9 @@ func (m serviceManager) run(ctx context.Context, args []string, store string, ou
 		state := "not-installed"
 		if installed {
 			state = "stopped"
-			if m.action(ctx, "status") == nil {
-				state = "starting-or-failed"
+			state = m.state(ctx)
+			if state == "running" {
+				state = "starting"
 				probe, c := context.WithTimeout(ctx, time.Second)
 				s, e := statusAt(probe, endpoint)
 				c()
@@ -229,7 +266,7 @@ func (m serviceManager) run(ctx context.Context, args []string, store string, ou
 	switch verb {
 	case "install":
 		if installed {
-			if m.action(ctx, "status") == nil {
+			if m.state(ctx) == "running" {
 				return m.ready(ctx, endpoint, root)
 			}
 			if err = m.action(ctx, "start"); err != nil {
@@ -239,6 +276,12 @@ func (m serviceManager) run(ctx context.Context, args []string, store string, ou
 		}
 		if _, err = os.Stat(filepath.Join(root, "config.json")); err != nil {
 			return errors.New("run rag init before installing the service")
+		}
+		probe, c := context.WithTimeout(ctx, time.Second)
+		_, existing := statusAt(probe, endpoint)
+		c()
+		if existing == nil {
+			return errors.New("endpoint is already serving a foreground instance; stop it before service installation")
 		}
 		if err = os.MkdirAll(filepath.Join(root, "logs"), 0700); err != nil {
 			return err
@@ -268,7 +311,7 @@ func (m serviceManager) run(ctx context.Context, args []string, store string, ou
 		if !installed {
 			return errors.New("service is not installed")
 		}
-		if m.action(ctx, "status") != nil {
+		if m.state(ctx) != "running" {
 			if err = m.action(ctx, "start"); err != nil {
 				return err
 			}
@@ -278,7 +321,7 @@ func (m serviceManager) run(ctx context.Context, args []string, store string, ou
 		if !installed {
 			return errors.New("service is not installed")
 		}
-		if m.action(ctx, "status") != nil {
+		if m.state(ctx) != "running" {
 			err = m.action(ctx, "start")
 		} else {
 			err = m.action(ctx, "restart")
