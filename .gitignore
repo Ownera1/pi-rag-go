@@ -19,3 +19,6 @@ __tests__/
 /bin/
 
 /evaluation/runs/
+
+/dist/
+__pycache__/

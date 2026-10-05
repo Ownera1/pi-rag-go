@@ -266,7 +266,7 @@ func (w *Watcher) Run(ctx context.Context) {
 			} else {
 				retry = 30 * time.Second
 			}
-			w.set(running, dirty)
+			w.set(running, dirty || fire != nil)
 		}
 	}
 }

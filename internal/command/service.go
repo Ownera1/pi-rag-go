@@ -141,8 +141,11 @@ func (m serviceManager) action(ctx context.Context, verb string) error {
 			args = []string{"--user", verb, "rag-go.service"}
 		}
 	}
-	_, err := m.execute(ctx, tool, args...)
-	return err
+	body, err := m.execute(ctx, tool, args...)
+	if err != nil {
+		return fmt.Errorf("%s %s failed: %w: %s", tool, verb, err, strings.TrimSpace(string(body)))
+	}
+	return nil
 }
 
 func (m serviceManager) state(ctx context.Context) string {

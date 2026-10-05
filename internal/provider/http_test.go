@@ -6,11 +6,30 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/Ownera1/rag-go/internal/model"
 )
+
+func TestProviderErrorRedactsCredentialBeforeTruncation(t *testing.T) {
+	key := strings.Repeat("private-credential-", 15)
+	t.Setenv("RAG_TEST_PROVIDER_SECRET", key)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		w.Write([]byte("invalid key: " + key))
+	}))
+	defer server.Close()
+	p, err := NewHTTP(model.ProviderConfig{Type: "openai", Model: "test", Dimensions: 2, BaseURL: server.URL, APIKeyEnv: "RAG_TEST_PROVIDER_SECRET"}, 1000, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.EmbedQuery(context.Background(), "test")
+	if err == nil || strings.Contains(err.Error(), "private-credential") || !strings.Contains(err.Error(), "[redacted]") {
+		t.Fatal(err)
+	}
+}
 
 func TestVoyageRolesAndOutOfOrderEmbeddings(t *testing.T) {
 	roles := []string{}

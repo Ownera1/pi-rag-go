@@ -85,3 +85,12 @@ func TestCredentialsDoNotOverwriteEnvironment(t *testing.T) {
 		t.Fatal("accepted public credentials")
 	}
 }
+
+func TestEndpointDiscoverySupportsLegacyProviderSchema(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "config.json"), []byte(`{"embedding":{"provider":"local","model":"MiniLM"}}`), 0600)
+	endpoint, err := endpointFor(root)
+	if err != nil || endpoint != "http://127.0.0.1:7331/mcp" {
+		t.Fatal(endpoint, err)
+	}
+}

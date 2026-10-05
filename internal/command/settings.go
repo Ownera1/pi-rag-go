@@ -47,9 +47,18 @@ func settingsForDaemon(store, config string, legacy bool) (model.Config, error) 
 }
 
 func endpointFor(store string) (string, error) {
-	cfg, err := settings(store)
-	if err != nil {
+	// Clients only need runtime addressing; legacy provider configs have a different schema.
+	var cfg struct {
+		Runtime model.RuntimeConfig `json:"runtime"`
+	}
+	b, err := os.ReadFile(filepath.Join(store, "config.json"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
+	}
+	if err == nil {
+		if err = json.Unmarshal(b, &cfg); err != nil {
+			return "", err
+		}
 	}
 	addr := cfg.Runtime.Listen
 	if addr == "" {
