@@ -154,6 +154,7 @@ type IndexingConfig struct {
 }
 
 type Config struct {
+	Runtime         RuntimeConfig  `json:"runtime,omitempty"`
 	Embedding       ProviderConfig `json:"embedding"`
 	Reranker        ProviderConfig `json:"reranker"`
 	Chunking        ChunkingConfig `json:"chunking"`
@@ -165,6 +166,24 @@ type Config struct {
 	TopK            int            `json:"topK"`
 	HTTPTimeoutMs   int            `json:"httpTimeoutMs"`
 	HTTPMaxRetries  int            `json:"httpMaxRetries"`
+}
+
+// Runtime settings do not change the embedding or processing fingerprints.
+type RuntimeConfig struct {
+	Listen      string            `json:"listen,omitempty"`
+	PDF         PDFConfig         `json:"pdf,omitempty"`
+	AutoRefresh AutoRefreshConfig `json:"autoRefresh,omitempty"`
+}
+type PDFConfig struct {
+	Backend   string `json:"backend,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Command   string `json:"command,omitempty"`
+	TimeoutMs int    `json:"timeoutMs,omitempty"`
+}
+type AutoRefreshConfig struct {
+	Enabled    bool `json:"enabled"`
+	DebounceMs int  `json:"debounceMs,omitempty"`
+	RescanMs   int  `json:"rescanMs,omitempty"`
 }
 
 type EmbeddingProvider interface {
