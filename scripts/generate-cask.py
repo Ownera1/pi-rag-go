@@ -65,7 +65,7 @@ def generate_formula(version: str, checksums: str) -> str:
         for arch, ruby_arch in (("arm64", "arm"), ("amd64", "intel")):
             name = f"rag-go_{version}_{os_name}_{arch}.tar.gz"
             platforms.append(f'''    on_{ruby_arch} do
-      url "https://github.com/Ownera1/rag-go/releases/download/{version}/{name}"
+      url "https://github.com/Ownera1/rag-go/releases/download/{version}/{name}?package=formula"
       sha256 "{hashes[name]}"
     end''')
         stanzas.append(f"  on_{ruby_os} do\n" + "\n".join(platforms) + "\n  end")

@@ -32,6 +32,7 @@ class ReleaseTests(unittest.TestCase):
                               for os_name in ("darwin", "linux") for arch in ("arm64", "amd64"))
         rendered = cask.generate_formula("v1.2.3", checksums)
         self.assertEqual(rendered.count('      url "'), 4)
+        self.assertEqual(rendered.count('?package=formula"'), 4)
         self.assertIn('bin.install "rag", "ragd", "ragctl", "ragprep", "rageval"', rendered)
         self.assertNotIn('depends_on "go"', rendered)
         with self.assertRaises(KeyError):
