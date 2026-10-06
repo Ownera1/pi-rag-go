@@ -31,6 +31,15 @@ func MCP(ctx context.Context, args []string, stderr io.Writer) error {
 	if *transport != "stdio" && *transport != "http" {
 		return errors.New("transport must be stdio or http")
 	}
+	if *transport == "stdio" && *root == "" {
+		// A user-wide registration starts here in any directory, including
+		// projects without a workspace; each call finds its own workspace.
+		err := mcpserver.NewDynamic(*readOnly, ctx).Run(ctx, &mcp.StdioTransport{})
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
 	core, err := rag.Open(rag.Options{WorkspaceDir: *root, ReadOnly: *readOnly || *transport == "http"})
 	if err != nil {
 		return err

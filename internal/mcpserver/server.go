@@ -2,16 +2,61 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Ownera1/rag-go/internal/workspace"
 	"github.com/Ownera1/rag-go/pkg/rag"
 )
 
+// resolve opens the workspace a tool call targets; dir is the optional
+// workspace argument. done releases the workspace after the call.
+type resolve func(dir string) (core *rag.Core, done func(), err error)
+
+// New serves one fixed workspace.
 func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
+	root := core.WorkspaceDir()
+	return serve(func(dir string) (*rag.Core, func(), error) {
+		if dir != "" {
+			found, err := workspace.DiscoverFrom(dir)
+			if err != nil {
+				return nil, nil, err
+			}
+			if found != root {
+				return nil, nil, fmt.Errorf("this server serves only workspace %s", root)
+			}
+		}
+		return core, func() {}, nil
+	}, core.ReadOnly(), lifecycle...)
+}
+
+// NewDynamic resolves the workspace on every call from the workspace argument
+// or the server's working directory, so one registration serves every project.
+func NewDynamic(readOnly bool, lifecycle ...context.Context) *mcp.Server {
+	return serve(func(dir string) (*rag.Core, func(), error) {
+		var root string
+		var err error
+		if dir == "" {
+			root, err = workspace.Discover("")
+		} else {
+			root, err = workspace.DiscoverFrom(dir)
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w (pass the project directory as workspace)", err)
+		}
+		core, err := rag.Open(rag.Options{WorkspaceDir: root, ReadOnly: readOnly})
+		if err != nil {
+			return nil, nil, err
+		}
+		return core, func() { _ = core.Close() }, nil
+	}, readOnly, lifecycle...)
+}
+
+func serve(open resolve, readOnly bool, lifecycle ...context.Context) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "rag-go", Version: "0.2.0"}, nil)
 	if len(lifecycle) > 0 {
 		// Stateful MCP sessions detach tool contexts from the initiating HTTP
@@ -31,6 +76,7 @@ func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 		})
 	}
 	type queryIn struct {
+		Workspace     string              `json:"workspace,omitempty" jsonschema:"absolute path of the project, or any directory inside it; defaults to the directory the agent was started in"`
 		Filter        *rag.MetadataFilter `json:"filter,omitempty"`
 		Query         string              `json:"query"`
 		TopK          int                 `json:"top_k,omitempty"`
@@ -45,8 +91,13 @@ func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "rag_query",
 		Description: "Search this workspace; local queries synchronize changed documents unless disable_sync=true",
-		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: core.ReadOnly()},
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in queryIn) (*mcp.CallToolResult, rag.QueryResult, error) {
+		core, done, err := open(in.Workspace)
+		if err != nil {
+			return nil, rag.QueryResult{}, err
+		}
+		defer done()
 		r, e := core.Query(ctx, in.Query, rag.QueryOptions{
 			Filter:        in.Filter,
 			DisableSync:   in.DisableSync,
@@ -60,12 +111,19 @@ func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 		return nil, r, e
 	})
 
-	type empty struct{}
+	type workspaceIn struct {
+		Workspace string `json:"workspace,omitempty" jsonschema:"absolute path of the project, or any directory inside it; defaults to the directory the agent was started in"`
+	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "rag_status",
 		Description: "Show workspace and index status without triggering model calls",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.Status, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in workspaceIn) (*mcp.CallToolResult, rag.Status, error) {
+		core, done, err := open(in.Workspace)
+		if err != nil {
+			return nil, rag.Status{}, err
+		}
+		defer done()
 		r, e := core.Status(ctx)
 		return nil, r, e
 	})
@@ -78,20 +136,35 @@ func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 		Name:        "rag_list_documents",
 		Description: "List indexed canonical document paths",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, listOut, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in workspaceIn) (*mcp.CallToolResult, listOut, error) {
+		core, done, err := open(in.Workspace)
+		if err != nil {
+			return nil, listOut{}, err
+		}
+		defer done()
 		r, e := core.ListDocuments(ctx)
 		return nil, listOut{r}, e
 	})
 
-	if !core.ReadOnly() {
-		mcp.AddTool(s, &mcp.Tool{Name: "rag_zotero_sync", Description: "Read a complete Zotero Local API metadata snapshot into this workspace catalog; no document embedding or Zotero writes"}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.ZoteroSyncResult, error) {
+	if !readOnly {
+		mcp.AddTool(s, &mcp.Tool{Name: "rag_zotero_sync", Description: "Read a complete Zotero Local API metadata snapshot into this workspace catalog; no document embedding or Zotero writes"}, func(ctx context.Context, _ *mcp.CallToolRequest, in workspaceIn) (*mcp.CallToolResult, rag.ZoteroSyncResult, error) {
+			core, done, err := open(in.Workspace)
+			if err != nil {
+				return nil, rag.ZoteroSyncResult{}, err
+			}
+			defer done()
 			r, e := core.SyncZotero(ctx, nil)
 			if e != nil {
 				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: e.Error()}}}, r, nil
 			}
 			return nil, r, e
 		})
-		mcp.AddTool(s, &mcp.Tool{Name: "rag_zotero_match", Description: "Match indexed documents to cached Zotero metadata; fuzzy title matches are candidates only"}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.ZoteroMatchResult, error) {
+		mcp.AddTool(s, &mcp.Tool{Name: "rag_zotero_match", Description: "Match indexed documents to cached Zotero metadata; fuzzy title matches are candidates only"}, func(ctx context.Context, _ *mcp.CallToolRequest, in workspaceIn) (*mcp.CallToolResult, rag.ZoteroMatchResult, error) {
+			core, done, err := open(in.Workspace)
+			if err != nil {
+				return nil, rag.ZoteroMatchResult{}, err
+			}
+			defer done()
 			r, e := core.MatchZotero(ctx)
 			if e != nil {
 				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: e.Error()}}}, r, nil
@@ -99,17 +172,28 @@ func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 			return nil, r, e
 		})
 		type linkIn struct {
+			Workspace string              `json:"workspace,omitempty" jsonschema:"absolute path of the project, or any directory inside it; defaults to the directory the agent was started in"`
 			Path      string              `json:"path"`
 			Reference rag.ZoteroReference `json:"reference"`
 		}
 		mcp.AddTool(s, &mcp.Tool{Name: "rag_zotero_link", Description: "Save a manually confirmed, locked document-to-Zotero association in the catalog"}, func(ctx context.Context, _ *mcp.CallToolRequest, in linkIn) (*mcp.CallToolResult, *rag.ZoteroMetadata, error) {
+			core, done, err := open(in.Workspace)
+			if err != nil {
+				return nil, nil, err
+			}
+			defer done()
 			r, e := core.LinkZotero(ctx, in.Path, in.Reference, false)
 			return nil, r, e
 		})
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        "rag_sync",
 			Description: "Synchronize this workspace documents directory",
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.IndexResult, error) {
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in workspaceIn) (*mcp.CallToolResult, rag.IndexResult, error) {
+			core, done, err := open(in.Workspace)
+			if err != nil {
+				return nil, rag.IndexResult{}, err
+			}
+			defer done()
 			r, e := core.Sync(ctx)
 			return indexResponse(r, e)
 		})
@@ -117,7 +201,12 @@ func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        "rag_rebuild",
 			Description: "Build a new generation from workspace documents and atomically publish it",
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.IndexResult, error) {
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in workspaceIn) (*mcp.CallToolResult, rag.IndexResult, error) {
+			core, done, err := open(in.Workspace)
+			if err != nil {
+				return nil, rag.IndexResult{}, err
+			}
+			defer done()
 			r, e := core.Rebuild(ctx)
 			return indexResponse(r, e)
 		})

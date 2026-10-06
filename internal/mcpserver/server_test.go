@@ -157,3 +157,70 @@ func TestHTTPHostOriginBoundary(t *testing.T) {
 		}
 	}
 }
+
+func statusRoot(t *testing.T, ctx context.Context, session *mcp.ClientSession, args map[string]any) (string, *mcp.CallToolResult) {
+	t.Helper()
+	r, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "rag_status", Arguments: args})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.IsError {
+		return "", r
+	}
+	b, _ := json.Marshal(r.StructuredContent)
+	var status rag.Status
+	if err = json.Unmarshal(b, &status); err != nil {
+		t.Fatal(err)
+	}
+	return status.WorkspaceDir, r
+}
+
+func TestDynamicServerResolvesWorkspacePerCall(t *testing.T) {
+	a, b := testCore(t, t.TempDir(), false).WorkspaceDir(), testCore(t, t.TempDir(), false).WorkspaceDir()
+	t.Chdir(t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() { _ = NewDynamic(false, ctx).Run(ctx, serverTransport) }()
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil || len(tools.Tools) != 8 {
+		t.Fatalf("server outside a workspace: %+v %v", tools, err)
+	}
+	if _, r := statusRoot(t, ctx, session, map[string]any{}); r == nil || !r.IsError {
+		t.Fatal("call outside a workspace succeeded")
+	}
+	if root, r := statusRoot(t, ctx, session, map[string]any{"workspace": filepath.Join(a, "documents")}); root != a {
+		t.Fatalf("subdirectory argument: %q %+v", root, r)
+	}
+	if root, r := statusRoot(t, ctx, session, map[string]any{"workspace": b}); root != b {
+		t.Fatalf("second workspace: %q %+v", root, r)
+	}
+	t.Chdir(filepath.Join(b, "documents"))
+	if root, r := statusRoot(t, ctx, session, map[string]any{}); root != b {
+		t.Fatalf("working directory discovery: %q %+v", root, r)
+	}
+}
+
+func TestFixedServerRejectsOtherWorkspaces(t *testing.T) {
+	core, other := testCore(t, t.TempDir(), false), testCore(t, t.TempDir(), false)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() { _ = New(core, ctx).Run(ctx, serverTransport) }()
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if root, _ := statusRoot(t, ctx, session, map[string]any{"workspace": core.WorkspaceDir()}); root != core.WorkspaceDir() {
+		t.Fatal("own workspace rejected")
+	}
+	if _, r := statusRoot(t, ctx, session, map[string]any{"workspace": other.WorkspaceDir()}); r == nil || !r.IsError {
+		t.Fatal("pinned server served another workspace")
+	}
+}
