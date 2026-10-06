@@ -190,7 +190,7 @@ func (r *recordingEmbedding) EmbedDocuments(ctx context.Context, in []string) ([
 	return r.fakeEmbedding.EmbedDocuments(ctx, in)
 }
 
-func TestEmbeddingTextPrefersZoteroTitleAndSection(t *testing.T) {
+func TestHeadingPrefersZoteroTitleAndSection(t *testing.T) {
 	ctx := context.Background()
 	p := &recordingEmbedding{}
 	c := openTest(t, t.TempDir(), p)
@@ -219,5 +219,11 @@ func TestEmbeddingTextPrefersZoteroTitleAndSection(t *testing.T) {
 		if !seen {
 			t.Fatalf("missing embedding text %q in %q", text, p.texts)
 		}
+	}
+	// "Selected" occurs only in the Zotero title, so keyword search must
+	// reach it through the indexed heading.
+	q, err := c.Query(ctx, "Selected", QueryOptions{Mode: "bm25", DisableSync: true})
+	if err != nil || len(q.Hits) != 1 || !strings.Contains(q.Hits[0].Chunk.Content, "evidence second") {
+		t.Fatalf("heading not keyword-searchable: %+v %v", q, err)
 	}
 }

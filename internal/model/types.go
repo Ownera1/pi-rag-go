@@ -43,6 +43,8 @@ type Chunk struct {
 	PageEnd       *int    `json:"pageEnd"`
 	Section       *string `json:"section"`
 	ChunkIndex    int     `json:"chunkIndex"`
+	// Heading is "title > section", indexed for search but not stored.
+	Heading string `json:"-"`
 }
 
 type Hit struct {

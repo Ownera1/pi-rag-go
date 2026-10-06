@@ -278,7 +278,11 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 					chunks[i].Title = doc.Title
 					chunks[i].Format = doc.Format
 					chunks[i].ParserVersion = doc.ParserVersion
-					texts[i] = embeddingText(title, chunks[i].Section, chunks[i].Content)
+					chunks[i].Heading = heading(title, chunks[i].Section)
+					texts[i] = chunks[i].Content
+					if chunks[i].Heading != "" {
+						texts[i] = chunks[i].Heading + "\n\n" + texts[i]
+					}
 				}
 				select {
 				case embedSlots <- struct{}{}:
@@ -328,10 +332,11 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 	return result
 }
 
-// embeddingText prefixes a chunk with its document title and section path so
-// the vector carries context the chunk text alone lacks. Content stays bare.
-// ponytail: a Zotero link made after indexing reaches vectors only on rebuild.
-func embeddingText(title string, section *string, content string) string {
+// heading gives a chunk its document title and section path, prefixed to the
+// embedding input and indexed for keyword search, since chunk text alone
+// lacks that context. Content stays bare.
+// ponytail: a Zotero link made after indexing reaches the index only on rebuild.
+func heading(title string, section *string) string {
 	head := []string{}
 	if title != "" {
 		head = append(head, title)
@@ -339,10 +344,7 @@ func embeddingText(title string, section *string, content string) string {
 	if section != nil && *section != "" {
 		head = append(head, *section)
 	}
-	if len(head) == 0 {
-		return content
-	}
-	return strings.Join(head, " > ") + "\n\n" + content
+	return strings.Join(head, " > ")
 }
 
 func randomID() string {
