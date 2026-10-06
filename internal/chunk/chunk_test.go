@@ -82,3 +82,78 @@ func TestConfiguredChunkLimitsAndSectionBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeJoinsParagraphsWithinSectionAndPage(t *testing.T) {
+	a, b := "A", "B"
+	one, two := 1, 2
+	blocks := []model.Block{
+		{Text: "first", Section: &a, PageStart: &one, PageEnd: &one},
+		{Text: "second", Section: &a, PageStart: &one, PageEnd: &one},
+		{Text: "   "},
+		{Text: "next page", Section: &a, PageStart: &two, PageEnd: &two},
+		{Text: "next section", Section: &b, PageStart: &two, PageEnd: &two},
+		{Text: "unpaged"},
+		{Text: "unpaged too"},
+	}
+	got := Merge(blocks)
+	want := []string{"first\n\nsecond", "next page", "next section", "unpaged\n\nunpaged too"}
+	if len(got) != len(want) {
+		t.Fatalf("%+v", got)
+	}
+	for i, b := range got {
+		if b.Text != want[i] {
+			t.Fatalf("%d: %q", i, b.Text)
+		}
+	}
+	if *got[0].PageStart != 1 || *got[0].PageEnd != 1 || *blocks[0].PageEnd != 1 || blocks[0].Text != "first" {
+		t.Fatal("page range widened or input mutated")
+	}
+}
+
+func TestMergeKeepsLineNumbersExact(t *testing.T) {
+	l1, l1e, l3, l4, l7 := 1, 1, 3, 4, 7
+	blocks := []model.Block{
+		{Text: "one", LineStart: &l1, LineEnd: &l1e},
+		{Text: "three\nfour", LineStart: &l3, LineEnd: &l4},
+		{Text: "seven", LineStart: &l7, LineEnd: &l7}, // two blank lines before it
+	}
+	got := Merge(blocks)
+	if len(got) != 2 || got[0].Text != "one\n\nthree\nfour" || *got[0].LineStart != 1 || *got[0].LineEnd != 4 {
+		t.Fatalf("%+v", got)
+	}
+	chunks := Legacy(got[:1], model.ChunkingConfig{LegacyTarget: 1, LegacyMax: 2, LegacyOverlap: 0})
+	if last := chunks[len(chunks)-1]; last.LineEnd != 4 {
+		t.Fatalf("line drift: %+v", chunks)
+	}
+}
+
+type countingFake struct {
+	fake
+	calls int
+}
+
+func (c *countingFake) EmbedDocuments(ctx context.Context, in []string) ([][]float32, error) {
+	c.calls++
+	return c.fake.EmbedDocuments(ctx, in)
+}
+
+func TestSemanticBatchesUnitsAcrossBlocks(t *testing.T) {
+	cfg := model.DefaultConfig()
+	a, b := "A", "B"
+	blocks := []model.Block{}
+	for i := range 10 {
+		s := &a
+		if i%2 == 1 {
+			s = &b
+		}
+		blocks = append(blocks, model.Block{Text: "ALPHA short paragraph. Another sentence here.", Section: s})
+	}
+	p := &countingFake{}
+	chunks, err := Semantic(context.Background(), blocks, p, cfg)
+	if err != nil || len(chunks) != 10 {
+		t.Fatalf("%d chunks: %v", len(chunks), err)
+	}
+	if p.calls != 1 {
+		t.Fatalf("%d embedding calls for 20 units, want 1", p.calls)
+	}
+}

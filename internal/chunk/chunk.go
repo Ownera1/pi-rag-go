@@ -33,6 +33,43 @@ func Estimate(s string) int {
 	return max(1, cjk+(other+3)/4)
 }
 
+// Version identifies chunk boundary behavior for the processing fingerprint.
+const Version = "merged-blocks-v1"
+
+func sameInt(a, b *int) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
+
+func sameString(a, b *string) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
+}
+
+// Merge joins consecutive blocks that share a section and page range, so
+// paragraph-level exports (MinerU, DOCX, HTML, JATS) chunk to target size
+// instead of one chunk per paragraph. Chunks never gain a wider page range.
+// Line-numbered blocks join only across exactly one blank line, which keeps
+// line arithmetic on the joined text exact.
+func Merge(blocks []model.Block) []model.Block {
+	out := []model.Block{}
+	for _, b := range blocks {
+		if strings.TrimSpace(b.Text) == "" {
+			continue
+		}
+		if n := len(out); n > 0 {
+			last := &out[n-1]
+			lines := last.LineStart == nil && b.LineStart == nil
+			if last.LineStart != nil && last.LineEnd != nil && b.LineStart != nil && b.LineEnd != nil {
+				lines = *b.LineStart == *last.LineEnd+2 && strings.Count(last.Text, "\n") == *last.LineEnd-*last.LineStart
+			}
+			if lines && sameString(last.Section, b.Section) && sameInt(last.PageStart, b.PageStart) && sameInt(last.PageEnd, b.PageEnd) {
+				last.Text += "\n\n" + b.Text
+				last.LineEnd = b.LineEnd
+				continue
+			}
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
 func newChunk(text string, b model.Block, index, start, end int) model.Chunk {
 	return model.Chunk{
 		Content:    text,
@@ -389,36 +426,50 @@ func Semantic(ctx context.Context, blocks []model.Block, provider model.Embeddin
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	chunks := []model.Chunk{}
+	type split struct {
+		block model.Block
+		r     []rune
+		units []unit
+		first int // index of the block's first unit vector in all
+	}
+	splits := []split{}
+	texts := []string{}
 	for _, b := range blocks {
-		if e := ctx.Err(); e != nil {
-			return nil, e
-		}
 		r := []rune(b.Text)
 		units := splitUnits(r, cfg.Chunking.SemanticUnitMax)
 		if len(units) == 0 {
 			continue
 		}
-		vectors := make([][]float32, 0, len(units))
-		for i := 0; i < len(units); i += cfg.Indexing.EmbeddingBatchSize {
-			texts := []string{}
-			for _, u := range units[i:min(i+cfg.Indexing.EmbeddingBatchSize, len(units))] {
-				texts = append(texts, strings.TrimSpace(string(r[u.start:u.end])))
-			}
-			v, e := provider.EmbedDocuments(ctx, texts)
-			if e != nil {
-				return nil, e
-			}
-			if len(v) != len(texts) {
-				return nil, errors.New("semantic embedding count mismatch")
-			}
-			for _, x := range v {
-				if len(x) != provider.Dimensions() {
-					return nil, errors.New("semantic embedding dimension mismatch")
-				}
-			}
-			vectors = append(vectors, v...)
+		splits = append(splits, split{b, r, units, len(texts)})
+		for _, u := range units {
+			texts = append(texts, strings.TrimSpace(string(r[u.start:u.end])))
 		}
+	}
+	// Batch units across blocks so short blocks share requests.
+	all := make([][]float32, 0, len(texts))
+	for i := 0; i < len(texts); i += cfg.Indexing.EmbeddingBatchSize {
+		if e := ctx.Err(); e != nil {
+			return nil, e
+		}
+		batch := texts[i:min(i+cfg.Indexing.EmbeddingBatchSize, len(texts))]
+		v, e := provider.EmbedDocuments(ctx, batch)
+		if e != nil {
+			return nil, e
+		}
+		if len(v) != len(batch) {
+			return nil, errors.New("semantic embedding count mismatch")
+		}
+		for _, x := range v {
+			if len(x) != provider.Dimensions() {
+				return nil, errors.New("semantic embedding dimension mismatch")
+			}
+		}
+		all = append(all, v...)
+	}
+	chunks := []model.Chunk{}
+	for _, sp := range splits {
+		b, r, units := sp.block, sp.r, sp.units
+		vectors := all[sp.first : sp.first+len(units)]
 		for cursor := 0; cursor < len(units); {
 			if e := ctx.Err(); e != nil {
 				return nil, e
