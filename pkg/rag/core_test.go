@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Ownera1/rag-go/internal/store"
 	"github.com/Ownera1/rag-go/internal/workspace"
@@ -326,20 +329,201 @@ func TestChineseBM25OriginalText(t *testing.T) {
 	defer c.Close()
 	text := "本文研究多无人机信道估计方法 pilot"
 	sourceFile(t, docPath(c, "note.txt"), []byte(text))
-	for _, query := range []string{"信道估计", "无人机", "信", "信道估计 pilot"} {
+	// Any shared term recalls the chunk, including questions and unmatched words.
+	for _, query := range []string{"信道估计", "无人机", "信", "信道估计 pilot", "信道估计 absent", "如何进行信道估计？"} {
 		q, err := c.Query(context.Background(), query, QueryOptions{Mode: "bm25"})
 		if err != nil || len(q.Hits) != 1 || q.Hits[0].Chunk.Content != text {
 			t.Fatalf("%s: %+v %v", query, q, err)
 		}
 	}
-	q, err := c.Query(context.Background(), "信道估计 absent", QueryOptions{Mode: "bm25"})
+	q, err := c.Query(context.Background(), "卫星 absent", QueryOptions{Mode: "bm25"})
 	if err != nil || len(q.Hits) != 0 {
-		t.Fatalf("mixed: %+v %v", q, err)
+		t.Fatalf("unrelated: %+v %v", q, err)
 	}
 	sourceFile(t, docPath(c, "note.txt"), []byte("无人机轨迹跟踪"))
 	q, err = c.Query(context.Background(), "信道估计", QueryOptions{Mode: "bm25"})
 	if err != nil || len(q.Hits) != 0 {
 		t.Fatalf("stale Chinese terms: %+v %v", q, err)
+	}
+}
+
+func TestBM25RecallsQuestionsAndRanksSharedTerms(t *testing.T) {
+	c := openTest(t, t.TempDir(), fakeEmbedding{})
+	defer c.Close()
+	sourceFile(t, docPath(c, "full.txt"), []byte("Channel estimation uses pilots in OFDM receivers."))
+	sourceFile(t, docPath(c, "partial.txt"), []byte("Receivers decode each channel symbol after synchronization."))
+	sourceFile(t, docPath(c, "full-cn.txt"), []byte("导频辅助的信道估计降低了误码率"))
+	sourceFile(t, docPath(c, "partial-cn.txt"), []byte("信道编码提升了可靠性"))
+	for query, best := range map[string]string{
+		"how does channel estimation work with pilots?": "full.txt",
+		"如何利用导频进行信道估计":                                  "full-cn.txt",
+	} {
+		q, err := c.Query(context.Background(), query, QueryOptions{Mode: "bm25", TopK: 5})
+		// The weaker match is retained below the stronger one.
+		if err != nil || len(q.Hits) != 2 || filepath.Base(q.Hits[0].Chunk.Path) != best {
+			t.Fatalf("%s: %+v %v", query, q, err)
+		}
+	}
+}
+
+func TestSnapshotReusesFingerprintsOfUnchangedInputs(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads files regardless of permissions")
+	}
+	ctx := context.Background()
+	c := openTest(t, t.TempDir(), fakeEmbedding{})
+	defer c.Close()
+	settled, fresh := docPath(c, "settled.txt"), docPath(c, "fresh.txt")
+	sourceFile(t, settled, []byte("settled evidence"))
+	sourceFile(t, fresh, []byte("fresh evidence"))
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(settled, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(workspace.Store(c.WorkspaceDir()), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved savedState
+	if err = json.Unmarshal(b, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := saved.Fingerprints[settled]; !ok {
+		t.Fatal("settled input not cached", string(b))
+	}
+	if _, ok := saved.Fingerprints[fresh]; ok {
+		t.Fatal("recently modified input cached", string(b))
+	}
+	// An unreadable but unchanged file proves the cached hash is used.
+	if err = os.Chmod(settled, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(settled, 0600)
+	s, err := c.Status(ctx)
+	if err != nil || s.NeedsSync || s.FreshnessError != "" {
+		t.Fatalf("cached input reread: %+v %v", s, err)
+	}
+	if err = os.Chmod(settled, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sourceFile(t, settled, []byte("changed evidence"))
+	if s, err = c.Status(ctx); err != nil || !s.NeedsSync {
+		t.Fatalf("change missed: %+v %v", s, err)
+	}
+}
+
+func TestMinerUParagraphsChunkTogetherWithinPage(t *testing.T) {
+	c := openTest(t, t.TempDir(), fakeEmbedding{})
+	defer c.Close()
+	items := []string{}
+	for page := range 2 {
+		for i := range 4 {
+			items = append(items, fmt.Sprintf(`{"type":"text","text":"page%d paragraph %d short evidence.","page_idx":%d}`, page, i, page))
+		}
+	}
+	sourceFile(t, docPath(c, "paper/paper_content_list.json"), []byte("["+strings.Join(items, ",")+"]"))
+	if _, err := c.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	q, err := c.Query(context.Background(), "evidence", QueryOptions{Mode: "bm25", TopK: 10})
+	if err != nil || len(q.Hits) != 2 {
+		t.Fatalf("want one chunk per page: %+v %v", q, err)
+	}
+	for _, h := range q.Hits {
+		page := *h.Chunk.PageStart
+		if *h.Chunk.PageEnd != page || strings.Count(h.Chunk.Content, fmt.Sprintf("page%d", page-1)) != 4 {
+			t.Fatalf("page provenance: %+v", h.Chunk)
+		}
+	}
+}
+
+// markerEmbedding places each document by a marker word, and the query at [1,0].
+type markerEmbedding struct{ fakeEmbedding }
+
+func (markerEmbedding) EmbedDocuments(_ context.Context, in []string) ([][]float32, error) {
+	markers := map[string][]float32{"zc1": {1, 0}, "zb8": {0.8, 0.6}, "zd5": {0.5, 0.866}, "za0": {0, 1}}
+	out := make([][]float32, len(in))
+	for i, text := range in {
+		for marker, v := range markers {
+			if strings.Contains(text, marker) {
+				out[i] = v
+			}
+		}
+	}
+	return out, nil
+}
+
+func TestHybridFusionRewardsAgreementAcrossRetrievers(t *testing.T) {
+	c := openTest(t, t.TempDir(), markerEmbedding{})
+	defer c.Close()
+	// BM25 order: a, b. Vector order: c, b, d1, d2, a.
+	for name, text := range map[string]string{
+		"a.txt":  "kalman filter tracking kalman filter za0",
+		"b.txt":  "kalman smoothing zb8",
+		"c.txt":  "recursive state estimation zc1",
+		"d1.txt": "orbit propagation zd5",
+		"d2.txt": "orbit maneuver zd5",
+	} {
+		sourceFile(t, docPath(c, name), []byte(text))
+	}
+	top := func(alpha float64) Hit {
+		t.Helper()
+		q, err := c.Query(context.Background(), "kalman filter", QueryOptions{Alpha: &alpha})
+		if err != nil || q.Method != "hybrid" || len(q.Hits) == 0 {
+			t.Fatalf("alpha %v: %+v %v", alpha, q, err)
+		}
+		return q.Hits[0]
+	}
+	// b ranks second in both lists and beats each single-list winner.
+	if h := top(0.5); filepath.Base(h.Chunk.Path) != "b.txt" || h.BM25 <= 0 || math.Abs(h.Vector-0.8) > 1e-3 {
+		t.Fatalf("agreement: %+v", h)
+	}
+	if h := top(1); filepath.Base(h.Chunk.Path) != "a.txt" {
+		t.Fatalf("BM25 weight: %+v", h)
+	}
+	if h := top(0); filepath.Base(h.Chunk.Path) != "c.txt" {
+		t.Fatalf("vector weight: %+v", h)
+	}
+}
+
+type concurrentEmbedding struct {
+	fakeEmbedding
+	active, peak atomic.Int32
+}
+
+func (p *concurrentEmbedding) EmbedDocuments(ctx context.Context, in []string) ([][]float32, error) {
+	n := p.active.Add(1)
+	defer p.active.Add(-1)
+	for {
+		old := p.peak.Load()
+		if n <= old || p.peak.CompareAndSwap(old, n) {
+			break
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	return p.fakeEmbedding.EmbedDocuments(ctx, in)
+}
+
+func TestIndexingEmbedsDocumentsConcurrentlyWithinLimit(t *testing.T) {
+	p := &concurrentEmbedding{}
+	cfg := DefaultConfig()
+	cfg.Embedding.Model, cfg.Embedding.Dimensions = "fake", 2
+	cfg.Chunking.Mode = "legacy"
+	cfg.Indexing.EmbeddingWorkers = 3
+	c := configuredCore(t, t.TempDir(), cfg, p)
+	defer c.Close()
+	for i := range 8 {
+		sourceFile(t, docPath(c, fmt.Sprintf("note-%d.txt", i)), []byte(fmt.Sprintf("evidence %d", i)))
+	}
+	r, err := c.Sync(context.Background())
+	if err != nil || r.Indexed != 8 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if peak := p.peak.Load(); peak < 2 || peak > 3 {
+		t.Fatalf("embedding concurrency %d, want 2..3", peak)
 	}
 }
 

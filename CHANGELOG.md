@@ -5,6 +5,14 @@
 - Optional Zotero Local API metadata catalog with full snapshots, content hashes, normalized creators/tags/collections, soft deletion, and preserved manual orphan links.
 - Stable bibliographic document keys, exact attachment/unique DOI matching, portable Manifest references, query metadata, and prefilters for BM25/Chinese/vector recall.
 - `rag zotero sync/status/match/link/links` and local writable MCP metadata tools; read-only HTTP/stdio retain query/status/list only.
+- BM25 and Chinese BM25 match any query term and rank by shared terms, so natural-language questions recall instead of requiring every word or bigram.
+- Hybrid retrieval fuses BM25 and vector rankings with weighted reciprocal rank fusion (k = 60) instead of min-max score normalization, which always discarded each list's weakest candidate. `alpha` keeps its default and now weights rankings. Hit `bm25`/`vector` fields report raw BM25 relevance and cosine similarity rather than min-max values.
+- Freshness checks reuse persisted input fingerprints while file size, modification time and inode are unchanged; recently modified files are always rehashed.
+- Adjacent body blocks in the same section and page merge before chunking, so paragraph-level exports (MinerU, DOCX, HTML, JATS) no longer produce one chunk per paragraph. This changes the processing fingerprint: existing v0.2 indexes report `rebuild required`.
+- Semantic chunking batches sentence-unit embeddings across blocks instead of issuing one request per block.
+- Per-document source attribution moves from the per-chunk `chunk_sources` table to the `files` row; readers of older stores still work.
+- Replacement lookup for canonical packages uses a sorted prefix range and an ancestor walk instead of comparing every indexed path; chunk inserts use prepared statements.
+- Indexing embeds documents concurrently, bounded by the new `indexing.embeddingWorkers` (default 4); SQLite writes remain serialized.
 
 - Workspace-scoped `.rag-go` configuration and indexes, one documents root, direct Core CLI and stdio MCP.
 - Query-triggered incremental synchronization with explicit freshness, persisted failures and a 60-second retry cooldown.

@@ -15,53 +15,36 @@ import (
 	"github.com/Ownera1/rag-go/internal/store"
 )
 
+// quotedQuery matches any term so natural-language questions still recall;
+// BM25 ranks chunks containing more and rarer terms first.
 func quotedQuery(query string) string {
 	terms := strings.Fields(query)
 	out := make([]string, len(terms))
 	for i, t := range terms {
 		out[i] = `"` + strings.ReplaceAll(t, `"`, `""`) + `"`
 	}
-	return strings.Join(out, " ")
+	return strings.Join(out, " OR ")
 }
 
-func normalizeBM25(rows []store.Match) map[int64]float64 {
-	out := map[int64]float64{}
-	if len(rows) == 0 {
-		return out
-	}
-	minV, maxV := rows[0].Score, rows[0].Score
-	for _, x := range rows {
-		minV = math.Min(minV, x.Score)
-		maxV = math.Max(maxV, x.Score)
-	}
-	for _, x := range rows {
-		if maxV == minV {
-			out[x.RowID] = 1
-		} else {
-			out[x.RowID] = (maxV - x.Score) / (maxV - minV)
-		}
-	}
-	return out
-}
+// rrfK damps the head of each ranking in reciprocal rank fusion; 60 is the
+// customary constant from Cormack et al. (2009).
+const rrfK = 60
 
-func normalizeVector(rows []store.Match) map[int64]float64 {
-	out := map[int64]float64{}
-	if len(rows) == 0 {
-		return out
+// ranks orders candidates by relevance (higher first) and returns 1-based ranks.
+func ranks(relevance map[int64]float64) map[int64]int {
+	ids := make([]int64, 0, len(relevance))
+	for id := range relevance {
+		ids = append(ids, id)
 	}
-	minV, maxV := math.Inf(1), math.Inf(-1)
-	for _, x := range rows {
-		v := 1 - x.Score*x.Score/2
-		out[x.RowID] = v
-		minV = math.Min(minV, v)
-		maxV = math.Max(maxV, v)
-	}
-	for id, v := range out {
-		if maxV == minV {
-			out[id] = 1
-		} else {
-			out[id] = (v - minV) / (maxV - minV)
+	sort.Slice(ids, func(i, j int) bool {
+		if relevance[ids[i]] != relevance[ids[j]] {
+			return relevance[ids[i]] > relevance[ids[j]]
 		}
+		return ids[i] < ids[j]
+	})
+	out := make(map[int64]int, len(ids))
+	for i, id := range ids {
+		out[id] = i + 1
 	}
 	return out
 }
@@ -83,49 +66,18 @@ func transient(err error) bool {
 		strings.Contains(s, "no such host")
 }
 
-func (c *session) query(ctx context.Context, query string, opts QueryOptions) (out QueryResult, err error) {
+func (c *session) query(ctx context.Context, query string, opts QueryOptions, plan queryPlan) (out QueryResult, err error) {
 	started := time.Now()
 	defer func() { out.ElapsedMs = float64(time.Since(started).Microseconds()) / 1000 }()
-	out = QueryResult{Query: query, Hits: []model.Hit{}, Method: "hybrid"}
+	out = QueryResult{Query: query, Hits: []model.Hit{}, Method: plan.mode}
 	if err := ctx.Err(); err != nil {
 		return out, err
 	}
-	if strings.TrimSpace(query) == "" {
-		return out, errors.New("query is required")
-	}
-	topK := opts.TopK
-	if topK == 0 {
-		topK = c.cfg.TopK
-	}
-	candidate := opts.CandidateTopK
-	if candidate == 0 {
-		candidate = c.cfg.CandidateTopK
-	}
-	if topK < 1 || topK > 200 || candidate < topK || candidate > 200 {
-		return out, errors.New("invalid top_k/candidate_top_k")
-	}
-	alpha := c.cfg.Alpha
-	if opts.Alpha != nil {
-		alpha = *opts.Alpha
-	}
-	if math.IsNaN(alpha) || alpha < 0 || alpha > 1 {
-		return out, errors.New("alpha must be in [0,1]")
-	}
-	mode := opts.Mode
-	if mode == "" {
-		mode = "hybrid"
-	}
-	if mode != "hybrid" && mode != "bm25" && mode != "vector" {
-		return out, errors.New("mode must be hybrid, vector or bm25")
-	}
+	topK, candidate, alpha, mode := plan.topK, plan.candidate, plan.alpha, plan.mode
 	reranker := c.reranker
 	if opts.DisableRerank {
 		reranker = nil
 	}
-	if opts.RequireRerank && reranker == nil {
-		return out, errors.New("reranker required but unavailable")
-	}
-	out.Method = mode
 	filtered, syncedAt, err := c.queryMetadata(ctx, opts.Filter)
 	if err != nil {
 		return out, err
@@ -133,9 +85,6 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions) (o
 	out.MetadataSyncedAt = syncedAt
 	if c.db == nil {
 		return out, nil
-	}
-	if err := c.compatible(ctx, c.db); err != nil {
-		return out, err
 	}
 	stats, err := c.db.Stats(ctx)
 	if err != nil {
@@ -189,8 +138,6 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions) (o
 		out.Method = "bm25"
 
 	}
-	bm := normalizeBM25(fts)
-	vnorm := normalizeVector(vec)
 	ids := []int64{}
 	seen := map[int64]bool{}
 	for _, x := range fts {
@@ -218,22 +165,44 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions) (o
 			break
 		}
 	}
+	// Each retriever contributes by rank, not raw score, so BM25 and cosine
+	// scales never need to be reconciled. Hits keep the raw relevance values.
+	bm := map[int64]float64{}
+	for _, x := range fts {
+		ch, ok := chunks[x.RowID]
+		if !ok {
+			continue
+		}
+		b := -x.Score // FTS5 bm25() is negative; more negative is better.
+		if first != "" && strings.Contains(strings.ToLower(ch.Path), first) {
+			b *= 1.5
+		}
+		bm[x.RowID] = b
+	}
+	cosine := map[int64]float64{}
+	for _, x := range vec {
+		cosine[x.RowID] = 1 - x.Score*x.Score/2 // L2 distance of unit vectors.
+	}
+	bmRank, vecRank := ranks(bm), ranks(cosine)
+	bmWeight, vecWeight := alpha, 1-alpha
+	if len(vec) == 0 {
+		bmWeight = 1
+	}
+	if mode == "vector" {
+		bmWeight, vecWeight = 0, 1
+	}
 	for _, id := range ids {
 		ch, ok := chunks[id]
 		if !ok {
 			continue
 		}
-		b := bm[id]
-		if first != "" && strings.Contains(strings.ToLower(ch.Path), first) {
-			b = math.Min(1, b*1.5)
+		b, v := bm[id], cosine[id]
+		score := 0.0
+		if r, ok := bmRank[id]; ok {
+			score += bmWeight / float64(rrfK+r)
 		}
-		v := vnorm[id]
-		score := b
-		if len(vec) > 0 {
-			score = alpha*b + (1-alpha)*v
-		}
-		if mode == "vector" {
-			score = v
+		if r, ok := vecRank[id]; ok {
+			score += vecWeight / float64(rrfK+r)
 		}
 		if score > 0 {
 			hits = append(hits, model.Hit{Chunk: ch, BM25: b, Vector: v, Hybrid: score})
@@ -293,31 +262,44 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions) (o
 	return out, nil
 }
 
-func validateQuery(cfg Config, text string, opts QueryOptions, hasReranker bool) error {
+// queryPlan holds validated query parameters with configuration defaults applied.
+type queryPlan struct {
+	topK, candidate int
+	alpha           float64
+	mode            string
+}
+
+func validateQuery(cfg Config, text string, opts QueryOptions, hasReranker bool) (queryPlan, error) {
+	p := queryPlan{topK: opts.TopK, candidate: opts.CandidateTopK, alpha: cfg.Alpha, mode: opts.Mode}
 	if err := opts.Filter.Validate(); err != nil {
-		return err
+		return p, err
 	}
 	if strings.TrimSpace(text) == "" {
-		return errors.New("query is required")
+		return p, errors.New("query is required")
 	}
-	top, candidate := opts.TopK, opts.CandidateTopK
-	if top == 0 {
-		top = cfg.TopK
+	if p.topK == 0 {
+		p.topK = cfg.TopK
 	}
-	if candidate == 0 {
-		candidate = cfg.CandidateTopK
+	if p.candidate == 0 {
+		p.candidate = cfg.CandidateTopK
 	}
-	if top < 1 || top > 200 || candidate < top || candidate > 200 {
-		return errors.New("invalid top_k/candidate_top_k")
+	if p.topK < 1 || p.topK > 200 || p.candidate < p.topK || p.candidate > 200 {
+		return p, errors.New("invalid top_k/candidate_top_k")
 	}
-	if opts.Alpha != nil && (math.IsNaN(*opts.Alpha) || *opts.Alpha < 0 || *opts.Alpha > 1) {
-		return errors.New("alpha must be in [0,1]")
+	if opts.Alpha != nil {
+		p.alpha = *opts.Alpha
 	}
-	if opts.Mode != "" && opts.Mode != "bm25" && opts.Mode != "vector" && opts.Mode != "hybrid" {
-		return errors.New("mode must be hybrid, vector or bm25")
+	if math.IsNaN(p.alpha) || p.alpha < 0 || p.alpha > 1 {
+		return p, errors.New("alpha must be in [0,1]")
+	}
+	if p.mode == "" {
+		p.mode = "hybrid"
+	}
+	if p.mode != "bm25" && p.mode != "vector" && p.mode != "hybrid" {
+		return p, errors.New("mode must be hybrid, vector or bm25")
 	}
 	if opts.RequireRerank && (!hasReranker || opts.DisableRerank) {
-		return errors.New("reranker required but unavailable")
+		return p, errors.New("reranker required but unavailable")
 	}
-	return nil
+	return p, nil
 }

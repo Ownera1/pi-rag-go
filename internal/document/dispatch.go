@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Ownera1/rag-go/internal/model"
@@ -76,6 +78,44 @@ func InputFingerprint(ctx context.Context, path string) (string, error) {
 		return hash, err
 	}
 	return ShortHash(string(b) + "\x00" + string(data)), ctx.Err()
+}
+
+// InputStamp identifies the files InputFingerprint reads by metadata alone and
+// returns their newest modification time. A manifest is read to find content.
+func InputStamp(path string) (string, time.Time, error) {
+	files := []string{path}
+	if filepath.Base(path) == "rag-source.json" {
+		b, err := readFile(path)
+		if err != nil {
+			return "", time.Time{}, err
+		}
+		var m Manifest
+		if err = json.Unmarshal(b, &m); err != nil {
+			return "", time.Time{}, err
+		}
+		content, err := localContent(filepath.Dir(path), m.ContentPath)
+		if err != nil {
+			return "", time.Time{}, err
+		}
+		files = append(files, content)
+	}
+	var stamp strings.Builder
+	var newest time.Time
+	for _, f := range files {
+		st, err := os.Stat(f)
+		if err != nil {
+			return "", time.Time{}, err
+		}
+		var ino uint64
+		if sys, ok := st.Sys().(*syscall.Stat_t); ok {
+			ino = uint64(sys.Ino)
+		}
+		fmt.Fprintf(&stamp, "%s\x00%d\x00%d\x00%d\x00", f, st.Size(), st.ModTime().UnixNano(), ino)
+		if st.ModTime().After(newest) {
+			newest = st.ModTime()
+		}
+	}
+	return stamp.String(), newest, nil
 }
 
 func Parse(ctx context.Context, path string) (model.Document, error) {

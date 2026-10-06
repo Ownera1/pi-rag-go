@@ -20,7 +20,7 @@ func DefaultConfig() Config {
 		},
 		Reranker:        ProviderConfig{Type: "none", Model: "none"},
 		Chunking:        DefaultChunking(),
-		Indexing:        IndexingConfig{Workers: 32, SemanticWorkers: 2, EmbeddingBatchSize: 64},
+		Indexing:        IndexingConfig{Workers: 32, SemanticWorkers: 2, EmbeddingWorkers: 4, EmbeddingBatchSize: 64},
 		Documents:       "documents",
 		ExcludePatterns: []string{},
 		Alpha:           0.4,
@@ -104,7 +104,8 @@ func (c Config) Validate() error {
 		return errors.New("invalid chunking thresholds")
 	}
 	if c.Indexing.Workers < 1 || c.Indexing.Workers > 64 || c.Indexing.SemanticWorkers < 1 ||
-		c.Indexing.SemanticWorkers > c.Indexing.Workers || c.Indexing.EmbeddingBatchSize < 1 || c.Indexing.EmbeddingBatchSize > 256 {
+		c.Indexing.SemanticWorkers > c.Indexing.Workers || c.Indexing.EmbeddingWorkers < 1 || c.Indexing.EmbeddingWorkers > 64 ||
+		c.Indexing.EmbeddingBatchSize < 1 || c.Indexing.EmbeddingBatchSize > 256 {
 		return errors.New("invalid indexing concurrency or embedding batch size")
 	}
 	if c.Alpha < 0 || c.Alpha > 1 || c.TopK < 1 || c.CandidateTopK < c.TopK || c.CandidateTopK > 200 {

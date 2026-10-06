@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Ownera1/rag-go/internal/catalog"
+	"github.com/Ownera1/rag-go/internal/chunk"
 	"github.com/Ownera1/rag-go/internal/document"
 	"github.com/Ownera1/rag-go/internal/model"
 	"github.com/Ownera1/rag-go/internal/provider"
@@ -60,6 +61,7 @@ type session struct {
 	docs         string
 	cfg          Config
 	state        savedState
+	stamps       map[string]inputStamp
 	db           *store.DB
 	embedder     EmbeddingProvider
 	reranker     Reranker
@@ -116,6 +118,7 @@ func (c *Core) operation(ctx context.Context, write bool) (*session, error) {
 	if err != nil {
 		return fail(err)
 	}
+	s.stamps = s.state.Fingerprints
 	dbPath, err := store.ResolvePath(s.root)
 	if err != nil {
 		return fail(err)
@@ -218,9 +221,9 @@ func fingerprint(cfg Config) (string, string) {
 		BaseURL     string
 	}{cfg.Embedding.Type, cfg.Embedding.Model, cfg.Embedding.Dimensions, cfg.Embedding.BaseURL})
 	proc, _ := json.Marshal(struct {
-		Parser, Search string
-		Chunking       model.ChunkingConfig
-	}{document.ParserVersion, "han-ngrams-v1", cfg.Chunking})
+		Parser, Search, Chunker string
+		Chunking                model.ChunkingConfig
+	}{document.ParserVersion, "han-ngrams-v1", chunk.Version, cfg.Chunking})
 	eh, ph := sha256.Sum256(emb), sha256.Sum256(proc)
 	return hex.EncodeToString(eh[:]), hex.EncodeToString(ph[:])
 }
@@ -338,7 +341,8 @@ func (c *Core) Query(ctx context.Context, text string, opts QueryOptions) (out Q
 	if err != nil {
 		return out, err
 	}
-	if err = validateQuery(s.cfg, text, opts, s.reranker != nil); err != nil {
+	plan, err := validateQuery(s.cfg, text, opts, s.reranker != nil)
+	if err != nil {
 		s.close()
 		return out, err
 	}
@@ -373,6 +377,11 @@ func (c *Core) Query(ctx context.Context, text string, opts QueryOptions) (out Q
 		if err != nil {
 			return out, err
 		}
+		// Defaults come from the configuration reloaded by this operation.
+		if plan, err = validateQuery(s.cfg, text, opts, s.reranker != nil); err != nil {
+			s.close()
+			return out, err
+		}
 		snap = s.snapshot(ctx)
 	}
 	defer s.close()
@@ -394,7 +403,7 @@ func (c *Core) Query(ctx context.Context, text string, opts QueryOptions) (out Q
 			return out, errors.New(syncError)
 		}
 	}
-	out, err = s.query(ctx, text, opts)
+	out, err = s.query(ctx, text, opts, plan)
 	out.Freshness = "fresh"
 	if s.needsSync(snap) {
 		out.Freshness = "stale"

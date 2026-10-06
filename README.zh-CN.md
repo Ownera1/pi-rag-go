@@ -159,7 +159,9 @@ Claude 注册通过其 CLI 在工作区目录以 local scope 完成。Codex 注�
 
 Embedding 支持 Voyage，以及接收 `POST {baseUrl}/embeddings` 并返回 `data[{index,embedding}]` 的 OpenAI-compatible 服务。可选 rerank 支持 Voyage 或通用 HTTP `POST {baseUrl}/rerank`，请求为 `{model,query,documents,top_n}`，响应为 `results[{index,relevance_score}]`。`none` 禁用 rerank。
 
-查询模式为 `hybrid`（默认）、`bm25` 和 `vector`；`--no-rerank` 可用于基线测试。Hybrid 在查询 embedding 暂时失败时降级为 BM25，并返回 `method`/`degraded`；vector 模式返回错误。调用取消会中止操作。中文 BM25 使用汉字 unigram/bigram 索引。
+切块前会合并同一章节、同一页内相邻的正文 block，使 MinerU 等按段落导出的格式切出接近目标大小的块，且不会扩大页码范围。默认的 `semantic` 切块会先为每个句子级单元生成 embedding 来选择边界，再为最终的块生成 embedding，因此索引消耗的 embedding tokens 约为 `legacy` 的两倍。`indexing.embeddingWorkers`（默认 4）限制同时进行的文档 embedding 请求数。
+
+查询模式为 `hybrid`（默认）、`bm25` 和 `vector`；`--no-rerank` 可用于基线测试。Hybrid 在查询 embedding 暂时失败时降级为 BM25，并返回 `method`/`degraded`；vector 模式返回错误。调用取消会中止操作。BM25 命中任一查询词即可召回，中文 BM25 使用汉字 unigram/bigram 索引。Hybrid 使用加权倒数排名融合（RRF，k = 60）合并 BM25 与向量两路排名；alpha 是 BM25 排名的权重，1 - alpha 是向量排名的权重。结果中的 `bm25` 和 `vector` 为原始 BM25 相关度与余弦相似度，`hybrid` 为融合分数。
 
 默认 alpha 为 `0.4`，candidate top K 为 `30`，top K 为 `5`，语义分块阈值为 `120/280/420/140`。查询 usage 记录逻辑调用次数及估算 tokens，不包含重试和正文同步成本；同步报告单独记录索引工作。
 

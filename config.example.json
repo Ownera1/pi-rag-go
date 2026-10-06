@@ -29,6 +29,7 @@
   "indexing": {
     "workers": 32,
     "semanticWorkers": 2,
+    "embeddingWorkers": 4,
     "embeddingBatchSize": 64
   }
 }

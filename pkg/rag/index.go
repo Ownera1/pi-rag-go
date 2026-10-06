@@ -130,12 +130,13 @@ func scan(ctx context.Context, root string, patterns []string, ignoredRoots ...s
 }
 
 type work struct {
-	doc    model.Document
-	chunks []model.Chunk
-	skip   bool
-	err    error
-	path   string
-	stage  string
+	doc     model.Document
+	chunks  []model.Chunk
+	vectors [][]float32
+	skip    bool
+	err     error
+	path    string
+	stage   string
 }
 
 func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSnapshot, force bool) IndexResult {
@@ -157,9 +158,21 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 	if len(paths) == 0 {
 		return result
 	}
+	// Index previous paths once so each document's replacement lookup is a
+	// sorted prefix range or an ancestor walk, not a scan of every path.
+	sort.Strings(previous)
+	packages := map[string][]string{}
+	for _, old := range previous {
+		if filepath.Base(old) == "rag-source.json" || document.IsMinerUFile(old) {
+			packages[filepath.Dir(old)] = append(packages[filepath.Dir(old)], old)
+		}
+	}
 	jobs := make(chan string)
 	done := make(chan work, 32)
 	sem := make(chan struct{}, c.cfg.Indexing.SemanticWorkers)
+	// Embedding runs in the workers, bounded separately to respect provider
+	// rate limits; only the SQLite writes below are serialized.
+	embedSlots := make(chan struct{}, min(c.cfg.Indexing.EmbeddingWorkers, c.cfg.Indexing.Workers))
 	var wg sync.WaitGroup
 	workers := min(c.cfg.Indexing.Workers, len(paths))
 	for i := 0; i < workers; i++ {
@@ -194,18 +207,20 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 				logical := p
 				if filepath.Base(p) == "rag-source.json" || document.IsMinerUFile(p) {
 					logical = filepath.Dir(p)
-					for _, old := range previous {
-						if old != p && within(logical, old) {
-							doc.Replaces = append(doc.Replaces, old)
+					prefix := logical + string(filepath.Separator)
+					for i := sort.SearchStrings(previous, prefix); i < len(previous) && strings.HasPrefix(previous[i], prefix); i++ {
+						if previous[i] != p {
+							doc.Replaces = append(doc.Replaces, previous[i])
 						}
 					}
 				} else {
 					// Removing the package's canonical artifact can expose ordinary
 					// files. Retire its old representation in the same transaction,
 					// even when another document prevents global deletion cleanup.
-					for _, old := range previous {
-						if (filepath.Base(old) == "rag-source.json" || document.IsMinerUFile(old)) && within(filepath.Dir(old), p) {
-							doc.Replaces = append(doc.Replaces, old)
+					for dir := filepath.Dir(p); ; dir = filepath.Dir(dir) {
+						doc.Replaces = append(doc.Replaces, packages[dir]...)
+						if dir == filepath.Dir(dir) {
+							break
 						}
 					}
 				}
@@ -216,6 +231,7 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 						filepath.Base(p) == "rag-source.json" ||
 						strings.HasSuffix(strings.ToLower(p), ".txt"))
 				var chunks []model.Chunk
+				blocks := chunk.Merge(doc.Blocks)
 				if semantic {
 					select {
 					case sem <- struct{}{}:
@@ -223,19 +239,47 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 						done <- work{path: p, stage: "chunk", err: ctx.Err()}
 						continue
 					}
-					chunks, e = chunk.Semantic(ctx, doc.Blocks, c.embedder, c.cfg)
+					chunks, e = chunk.Semantic(ctx, blocks, c.embedder, c.cfg)
 					<-sem
 				} else if doc.Format != "text" {
-					for _, b := range doc.Blocks {
+					for _, b := range blocks {
 						for _, ch := range chunk.Legacy([]model.Block{b}, c.cfg.Chunking) {
 							ch.ChunkIndex = len(chunks)
 							chunks = append(chunks, ch)
 						}
 					}
 				} else {
-					chunks = chunk.Legacy(doc.Blocks, c.cfg.Chunking)
+					chunks = chunk.Legacy(blocks, c.cfg.Chunking)
 				}
-				done <- work{path: p, doc: doc, chunks: chunks, stage: "chunk", err: e}
+				if e != nil {
+					done <- work{path: p, stage: "chunk", err: e}
+					continue
+				}
+				if c.embedder == nil {
+					done <- work{path: p, stage: "embed", err: errors.New("embedding provider unavailable")}
+					continue
+				}
+				texts := make([]string, len(chunks))
+				for i := range chunks {
+					chunks[i].ID = doc.ID + "-" + fmt.Sprint(chunks[i].ChunkIndex)
+					chunks[i].Hash = document.ShortHash(chunks[i].Content)
+					chunks[i].Tokens = chunk.Estimate(chunks[i].Content)
+					chunks[i].Path = doc.Path
+					chunks[i].SourcePath = doc.SourcePath
+					chunks[i].Title = doc.Title
+					chunks[i].Format = doc.Format
+					chunks[i].ParserVersion = doc.ParserVersion
+					texts[i] = chunks[i].Content
+				}
+				select {
+				case embedSlots <- struct{}{}:
+				case <-ctx.Done():
+					done <- work{path: p, stage: "embed", err: ctx.Err()}
+					continue
+				}
+				vectors, e := c.embedder.EmbedDocuments(ctx, texts)
+				<-embedSlots
+				done <- work{path: p, doc: doc, chunks: chunks, vectors: vectors, stage: "embed", err: e}
 			}
 		}()
 	}
@@ -256,37 +300,14 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 			result.Skipped++
 			continue
 		}
-		if c.embedder == nil {
-			addFailure(&result, w.path, "embed", errors.New("embedding provider unavailable"))
-			continue
-		}
-		for i := range w.chunks {
-			w.chunks[i].ID = w.doc.ID + "-" + fmt.Sprint(w.chunks[i].ChunkIndex)
-			w.chunks[i].Hash = document.ShortHash(w.chunks[i].Content)
-			w.chunks[i].Tokens = chunk.Estimate(w.chunks[i].Content)
-			w.chunks[i].Path = w.doc.Path
-			w.chunks[i].SourcePath = w.doc.SourcePath
-			w.chunks[i].Title = w.doc.Title
-			w.chunks[i].Format = w.doc.Format
-			w.chunks[i].ParserVersion = w.doc.ParserVersion
-		}
-		texts := make([]string, len(w.chunks))
-		for i, ch := range w.chunks {
-			texts[i] = ch.Content
-		}
-		vectors, e := c.embedder.EmbedDocuments(ctx, texts)
-		stage := "embed"
-		if e == nil {
-			stage = "input"
-			hash, checkErr := document.InputFingerprint(ctx, w.path)
-			e = checkErr
-			if e == nil && hash != w.doc.Hash {
-				e = errors.New("document changed during embedding; existing content retained")
-			}
+		stage := "input"
+		hash, e := document.InputFingerprint(ctx, w.path)
+		if e == nil && hash != w.doc.Hash {
+			e = errors.New("document changed during embedding; existing content retained")
 		}
 		if e == nil {
 			stage = "store"
-			e = db.Replace(ctx, w.doc, w.chunks, vectors)
+			e = db.Replace(ctx, w.doc, w.chunks, w.vectors)
 		}
 		if e != nil {
 			addFailure(&result, w.path, stage, e)

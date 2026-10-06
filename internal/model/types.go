@@ -152,6 +152,7 @@ type ChunkingConfig struct {
 type IndexingConfig struct {
 	Workers            int `json:"workers"`
 	SemanticWorkers    int `json:"semanticWorkers"`
+	EmbeddingWorkers   int `json:"embeddingWorkers"`
 	EmbeddingBatchSize int `json:"embeddingBatchSize"`
 }
 

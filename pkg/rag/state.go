@@ -15,12 +15,24 @@ import (
 )
 
 type savedState struct {
-	Inputs               map[string]string `json:"inputs"`
-	FailedFiles          []FileFailure     `json:"failedFiles"`
-	LastSync             *IndexResult      `json:"lastSync,omitempty"`
-	LastAttemptAt        time.Time         `json:"lastAttemptAt,omitempty"`
-	LastAttemptSignature string            `json:"lastAttemptSignature,omitempty"`
+	Inputs               map[string]string     `json:"inputs"`
+	FailedFiles          []FileFailure         `json:"failedFiles"`
+	LastSync             *IndexResult          `json:"lastSync,omitempty"`
+	LastAttemptAt        time.Time             `json:"lastAttemptAt,omitempty"`
+	LastAttemptSignature string                `json:"lastAttemptSignature,omitempty"`
+	Fingerprints         map[string]inputStamp `json:"fingerprints,omitempty"`
 }
+
+// inputStamp caches an input fingerprint against file metadata so unchanged
+// sources are not reread on every operation.
+type inputStamp struct {
+	Stamp string `json:"stamp"`
+	Hash  string `json:"hash"`
+}
+
+// A file modified this close to hashing may change again within the same
+// timestamp granularity, so its stamp is not trusted (the "racy" case).
+const racyWindow = 3 * time.Second
 
 func loadState(root string) (savedState, error) {
 	s := savedState{Inputs: map[string]string{}, FailedFiles: []FileFailure{}}
@@ -67,8 +79,9 @@ func (s *session) snapshot(ctx context.Context) sourceSnapshot {
 	}
 	snap.paths = paths
 	parts := []string{s.docs}
+	stamps := map[string]inputStamp{}
 	for _, path := range paths {
-		hash, e := document.InputFingerprint(ctx, path)
+		hash, e := s.fingerprint(ctx, path, stamps)
 		parts = append(parts, path+"\x00"+hash)
 		if e != nil {
 			snap.failures = append(snap.failures, FileFailure{Path: path, Stage: "scan", Error: e.Error()})
@@ -77,11 +90,33 @@ func (s *session) snapshot(ctx context.Context) sourceSnapshot {
 			snap.inputs[path] = hash
 		}
 	}
+	if err == nil && ctx.Err() == nil {
+		s.stamps = stamps
+	}
 	for _, f := range snap.failures {
 		parts = append(parts, f.Path+"\x00"+f.Error)
 	}
 	snap.signature = document.ShortHash(strings.Join(parts, "\x00"))
 	return snap
+}
+
+// fingerprint reuses a cached hash while the stamp is unchanged. The stamp is
+// taken before reading, so a write during hashing yields a different stamp.
+func (s *session) fingerprint(ctx context.Context, path string, stamps map[string]inputStamp) (string, error) {
+	stamp, modified, err := document.InputStamp(path)
+	if err != nil {
+		return document.InputFingerprint(ctx, path)
+	}
+	if cached, ok := s.stamps[path]; ok && cached.Stamp == stamp {
+		stamps[path] = cached
+		return cached.Hash, nil
+	}
+	started := time.Now()
+	hash, err := document.InputFingerprint(ctx, path)
+	if err == nil && started.Sub(modified) > racyWindow {
+		stamps[path] = inputStamp{Stamp: stamp, Hash: hash}
+	}
+	return hash, err
 }
 
 func (s *session) needsSync(snap sourceSnapshot) bool {
@@ -99,21 +134,12 @@ func (s *session) needsSync(snap sourceSnapshot) bool {
 func (s *session) record(snap sourceSnapshot, r IndexResult) error {
 	inputs := map[string]string{}
 	if s.db != nil {
-		paths, err := s.db.List(context.Background())
-		if err != nil {
+		var err error
+		if inputs, err = s.db.Embedded(context.Background()); err != nil {
 			return err
-		}
-		for _, path := range paths {
-			hash, embedded, err := s.db.FileHash(context.Background(), path)
-			if err != nil {
-				return err
-			}
-			if embedded {
-				inputs[path] = hash
-			}
 		}
 	}
 	sort.Slice(r.Failures, func(i, j int) bool { return r.Failures[i].Path < r.Failures[j].Path })
-	s.state = savedState{Inputs: inputs, FailedFiles: r.Failures, LastSync: &r, LastAttemptAt: time.Now(), LastAttemptSignature: snap.signature}
+	s.state = savedState{Inputs: inputs, FailedFiles: r.Failures, LastSync: &r, LastAttemptAt: time.Now(), LastAttemptSignature: snap.signature, Fingerprints: s.stamps}
 	return workspace.AtomicJSON(filepath.Join(s.root, "state.json"), s.state)
 }
