@@ -168,11 +168,12 @@ Embedding 支持 Voyage，以及接收 `POST {baseUrl}/embeddings` 并返回 `da
 
 ## 源码构建与验证
 
-构建需要 Go 1.25+、CGO 和 C 编译器。发布的二进制运行时无需 Go 工具链或 PDF 引擎。
+构建需要 Go 1.25+、CGO 和 C 编译器。发布的二进制运行时无需 Go 工具链或 PDF 引擎。构建前先导出 SQLite 头文件参数，使 sqlite-vec 按实际链接的 SQLite 编译，而不是使用较旧的系统头文件：
 
 ```sh
 git clone https://github.com/Ownera1/rag-go.git
 cd rag-go
+export CGO_CFLAGS="$(scripts/cgo-flags.sh)"
 go build -tags sqlite_fts5 -o bin/rag ./cmd/rag
 
 # 以源码构建的 CLI 初始化工作区：

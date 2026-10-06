@@ -27,6 +27,8 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
           cache-dependency-path: go.sum
+      - name: Use bundled SQLite headers
+        run: echo "CGO_CFLAGS=$(scripts/cgo-flags.sh)" >> "$GITHUB_ENV"
       - name: Check formatting
         run: test -z "$(gofmt -l $(git ls-files '*.go'))"
       - name: Test with race detection

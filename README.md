@@ -124,9 +124,10 @@ Queries support `hybrid` (default), `bm25` and `vector`, with `--no-rerank` for 
 
 ## Build and verify
 
-Requires Go 1.25+, CGO and a C compiler. No PDF engine or Go toolchain is required by a released binary.
+Requires Go 1.25+, CGO and a C compiler. No PDF engine or Go toolchain is required by a released binary. Export the SQLite header flags first so sqlite-vec compiles against the SQLite it links, not an older system header:
 
 ```sh
+export CGO_CFLAGS="$(scripts/cgo-flags.sh)"
 go test -race -tags sqlite_fts5 ./...
 go vet -tags sqlite_fts5 ./...
 go build -tags sqlite_fts5 -o bin/rag ./cmd/rag
