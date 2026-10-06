@@ -8,7 +8,7 @@ PDF extraction, OCR and layout recovery happen upstream, using tools such as Min
 
 ## Quick start
 
-The workspace interface described here targets v0.2. Until v0.2 is published, released installers still provide v0.1; use the source build below to try this branch. See [migration](MIGRATION.md) before upgrading an existing installation.
+See [migration](MIGRATION.md) before upgrading an existing v0.1 installation.
 
 Install a published native macOS/Linux binary with Homebrew. Install once, then initialize each project:
 
