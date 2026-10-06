@@ -55,10 +55,17 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		args = append([]string{args[i]}, append(prefix, args[i+1:]...)...)
 	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "usage: rag init|sync|query|status|rebuild|clean|zotero|connect|mcp|eval|version [--workspace PATH] [options]")
+		fmt.Fprintln(out, "usage: rag install|uninstall|init|sync|query|status|rebuild|clean|zotero|connect|mcp|eval|version [--workspace PATH] [options]")
+		fmt.Fprintln(out, "\nGet started: rag install (once), then rag init in each project.")
 		return nil
 	}
 	cmd, rest := args[0], args[1:]
+	if cmd == "install" {
+		return Install(ctx, rest, in, out, errout)
+	}
+	if cmd == "uninstall" {
+		return Uninstall(ctx, rest, out, errout)
+	}
 	if cmd == "zotero" {
 		return Zotero(ctx, rest, out, errout)
 	}

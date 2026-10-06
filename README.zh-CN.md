@@ -10,33 +10,31 @@ PDF 提取、OCR 和版面恢复由 MinerU Desktop 等外部工具完成。rag-g
 
 **本文描述的是尚未发布的 v0.2 工作区接口。** 在 v0.2 发布前，发布版安装器仍提供 v0.1；体验本分支及 Zotero 集成时，请使用下文的源码构建方式。升级已有安装前请阅读 [迁移说明](MIGRATION.md)。
 
-通过 Homebrew 安装已发布的 macOS/Linux 原生二进制：
+通过 Homebrew 安装已发布的 macOS/Linux 原生二进制。安装一次，之后每个项目只需初始化：
 
 ```sh
 brew install --formula ownera1/tap/rag-go
+rag install    # 一次：embedding 服务、隐藏输入的 API key、接入 Claude Code 与 Codex
 cd my-project
-rag init
-# 将转换后的文档放入 ./documents，再执行：
-rag sync
-rag query '信道估计'
-rag connect claude
-rag connect codex
+rag init       # 不提问；./documents 中已有文件时直接建立索引
 ```
 
-`rag init [workspace] --docs PATH` 默认使用当前目录作为工作区，文档目录默认为 `./documents`。也可以指向外部文档目录，例如每篇论文各占一个文件夹的 MinerU 输出：
+执行 `rag install` 后重启 Claude Code 或 Codex，Agent 即可检索它所在的项目；在终端中 `rag query '信道估计'` 同样可用。查询会自动同步变更的文档，无需单独的索引步骤。
+
+`rag install` 将全局默认配置保存到 `~/.config/rag-go/config.json`，API key 保存到同目录的 `credentials.json`（权限 `0600`；可用 `XDG_CONFIG_HOME` 或 `RAG_GO_CONFIG_DIR` 修改位置）。它先验证 embedding 服务，再注册一个不绑定工作区的 MCP 服务器 `rag mcp`：Claude Code 使用 user scope，Codex 写入 `~/.codex/config.toml`，只改动 `[mcp_servers.rag-go]` 表，其他设置和注释保持不变。`--agents claude,codex` 或 `--agents none` 可覆盖自动检测。重复执行是安全的；`rag uninstall [--purge]` 可撤销。Voyage 默认模型为 `voyage-4-lite`，维度为 1024。使用 OpenAI-compatible 服务时，需要填写对应的模型、地址和维度：
+
+```sh
+rag install --embedding-type openai --model YOUR_MODEL --dimensions YOUR_DIMENSIONS \
+  --base-url http://127.0.0.1:11434/v1 --api-key-env=
+```
+
+`rag init [workspace] --docs PATH` 默认使用当前目录作为工作区，文档目录默认为 `./documents`。新工作区会复制一份全局默认配置，之后修改全局配置不会让已有索引失效。也可以指向外部文档目录，例如每篇论文各占一个文件夹的 MinerU 输出：
 
 ```sh
 rag init ~/Projects/my-project --docs /absolute/converted-papers
 ```
 
-交互初始化会询问文档目录、embedding 服务、模型及 API key；输入 key 时不回显。Voyage 默认模型为 `voyage-4-lite`，维度为 1024。使用 OpenAI-compatible 服务时，需要填写对应的模型、地址和维度：
-
-```sh
-rag init --embedding-type openai --model YOUR_MODEL --dimensions YOUR_DIMENSIONS \
-  --base-url http://127.0.0.1:11434/v1 --api-key-env=
-```
-
-非交互初始化从配置的环境变量读取凭据。`--offline` 跳过在线 embedding 探测，并明确报告该检查尚未完成。重复初始化保留已有设置，只更新显式指定的选项；配置损坏时会报错。修改文档根目录、embedding 或分块配置后，需要执行 `rag rebuild`。
+未执行 `rag install` 时，`rag init` 会询问文档目录、embedding 服务、模型及 API key（不回显），并把 key 保存在工作区；它接受与 `rag install` 相同的服务参数。凭据依次从环境变量、工作区、全局文件读取。`--no-sync` 跳过初始索引；`--offline` 跳过在线 embedding 探测和初始索引。重复初始化保留已有设置，只更新显式指定的选项；配置损坏时会报错。修改文档根目录、embedding 或分块配置后，需要执行 `rag rebuild`。
 
 ## 工作区与同步
 
@@ -135,12 +133,15 @@ catalog 包含人工确认状态，应随工作区备份。完整 schema 行为�
 ## MCP 与 Agent 接入
 
 ```sh
-rag mcp                                         # 本地 stdio，8 个工具
+rag mcp                                         # 本地 stdio，8 个工具，每次调用确定工作区
+rag mcp --workspace /absolute/project           # stdio，固定一个工作区
 rag mcp --read-only                              # stdio，3 个只读工具
 rag mcp --transport http --listen 127.0.0.1:7331   # 前台运行，只读 HTTP
 ```
 
 本地可写 MCP 提供 `rag_query`、`rag_status`、`rag_list_documents`、`rag_sync`、`rag_rebuild`、`rag_zotero_sync`、`rag_zotero_match` 和 `rag_zotero_link`。查询参数支持 `query`、`mode`、`top_k`、`candidate_top_k`、`alpha`、`disable_rerank`、`require_rerank`；`disable_sync=true` 禁用正文自动同步，`filter` 在召回前应用缓存的 Zotero metadata 条件。
+
+不带 `--workspace` 时，stdio `rag mcp` 可在任意目录启动，每次调用时确定工作区：优先使用可选的 `workspace` 工具参数（项目目录或其中任意子目录），否则使用 Agent 的工作目录。在工作区之外调用会提示如何初始化。带 `--workspace` 启动的服务和所有 HTTP 服务只服务一个工作区，拒绝其他工作区。
 
 只读 stdio 和所有 HTTP 服务仅暴露 query/status/list，拒绝写工具并关闭自动同步。查询仍可调用配置的 query embedding 或 reranker。HTTP 仅监听 loopback，保留 Host/Origin 校验，将地址打印到 stderr；不指定端口时使用临时端口。远程隧道可接入只读 stdio 或可选 HTTP 服务，隧道安装与账号配置由外部工具管理。
 
@@ -149,7 +150,7 @@ rag connect claude
 rag connect codex
 ```
 
-Claude 注册通过其 CLI 在工作区目录以 local scope 完成。Codex 注册合并项目 `.codex/config.toml`，保留无关设置和其他服务，TOML 注释及格式可能被规范化。两者都固定二进制和工作区的绝对路径，重复相同注册保持原状；冲突配置需加 `--replace`。Codex 仅为受信任项目加载项目配置。连接后重新加载 Agent；注册成功与 Agent 实际调用工具是不同的验收步骤。
+通常用 `rag install` 接入 Agent；`rag connect claude|codex` 则只为单个项目注册：Claude 注册通过其 CLI 在工作区目录以 local scope 完成。Codex 注册合并项目 `.codex/config.toml`，保留无关设置和其他服务，TOML 注释及格式可能被规范化。两者都固定二进制和工作区的绝对路径，重复相同注册保持原状；冲突配置需加 `--replace`。Codex 仅为受信任项目加载项目配置。连接后重新加载 Agent；注册成功与 Agent 实际调用工具是不同的验收步骤。
 
 ## 配置与检索
 

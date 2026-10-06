@@ -10,33 +10,31 @@ PDF extraction, OCR and layout recovery happen upstream, using tools such as Min
 
 The workspace interface described here targets v0.2. Until v0.2 is published, released installers still provide v0.1; use the source build below to try this branch. See [migration](MIGRATION.md) before upgrading an existing installation.
 
-Install a published native macOS/Linux binary with Homebrew:
+Install a published native macOS/Linux binary with Homebrew. Install once, then initialize each project:
 
 ```sh
 brew install --formula ownera1/tap/rag-go
+rag install    # once: embedding provider, hidden API key, Claude Code and Codex
 cd my-project
-rag init
-# Put structured documents in ./documents, then:
-rag sync
-rag query 'channel estimation'
-rag connect claude
-rag connect codex
+rag init       # no prompts; indexes ./documents when it has files
 ```
 
-`rag init [workspace] --docs PATH` defaults to the current directory and `./documents`. An explicit external documents directory is supported, including an existing directory containing one MinerU output folder per paper:
+Restart Claude Code or Codex after `rag install`. The agent then searches whichever project it runs in, and `rag query 'channel estimation'` works the same way from the shell. Queries synchronize changed documents automatically, so there is no separate indexing step.
+
+`rag install` saves user-wide defaults to `~/.config/rag-go/config.json` and the API key to `credentials.json` beside it (mode `0600`; `XDG_CONFIG_HOME` or `RAG_GO_CONFIG_DIR` relocates both). It verifies the embedding endpoint, then registers one workspace-agnostic MCP server, `rag mcp`, with Claude Code at user scope and with Codex in `~/.codex/config.toml`, editing only the `[mcp_servers.rag-go]` table so other settings and comments survive. `--agents claude,codex` or `--agents none` overrides detection. Re-running is safe; `rag uninstall [--purge]` reverses it. Voyage defaults remain `voyage-4-lite`, 1024 dimensions. OpenAI-compatible endpoints require the correct model, URL and dimensions:
+
+```sh
+rag install --embedding-type openai --model YOUR_MODEL --dimensions YOUR_DIMENSIONS \
+  --base-url http://127.0.0.1:11434/v1 --api-key-env=
+```
+
+`rag init [workspace] --docs PATH` defaults to the current directory and `./documents`. A new workspace copies the installed defaults, so later global changes never invalidate its index. An explicit external documents directory is supported, including an existing directory containing one MinerU output folder per paper:
 
 ```sh
 rag init ~/Projects/my-project --docs /absolute/converted-papers
 ```
 
-The initializer asks for the documents directory, embedding provider/model and hidden API key. Voyage defaults remain `voyage-4-lite`, 1024 dimensions. OpenAI-compatible endpoints require the correct model, URL and dimensions:
-
-```sh
-rag init --embedding-type openai --model YOUR_MODEL --dimensions YOUR_DIMENSIONS \
-  --base-url http://127.0.0.1:11434/v1 --api-key-env=
-```
-
-Noninteractive initialization takes credentials from the configured environment variable. `--offline` skips the live embedding probe and reports it as unchecked. Repeating initialization preserves settings except explicitly supplied options; damaged configuration is rejected. A documents-root, embedding or chunking change requires `rag rebuild`.
+Without `rag install`, `rag init` asks for the documents directory, embedding provider/model and hidden API key, and stores the key in the workspace; it accepts the same provider options as `rag install`. Credentials resolve from the environment, then the workspace, then the user-wide file. `--no-sync` skips initial indexing; `--offline` skips the live embedding probe and indexing. Repeating initialization preserves settings except explicitly supplied options; damaged configuration is rejected. A documents-root, embedding or chunking change requires `rag rebuild`.
 
 ## Workspace and synchronization
 
@@ -96,16 +94,19 @@ An optional source manifest uses the existing format:
 ## MCP and Agent connections
 
 ```sh
-rag mcp                                      # local stdio, eight tools
+rag mcp                                      # local stdio, eight tools, workspace per call
+rag mcp --workspace /absolute/project        # stdio pinned to one workspace
 rag mcp --read-only                          # stdio, three read tools
 rag mcp --transport http --listen 127.0.0.1:7331  # optional foreground, read-only
 ```
 
 Local tools are `rag_query`, `rag_status`, `rag_list_documents`, `rag_sync`, `rag_rebuild`, `rag_zotero_sync`, `rag_zotero_match` and `rag_zotero_link`. Query arguments retain `query`, `mode`, `top_k`, `candidate_top_k`, `alpha`, `disable_rerank`, and `require_rerank`; `disable_sync=true` searches without synchronization. Optional `filter` applies cached Zotero metadata before recall. Local auto-sync queries are not marked read-only.
 
+Without `--workspace`, stdio `rag mcp` starts in any directory and resolves the workspace on every call: from the optional `workspace` tool argument (a project directory or any directory inside it), otherwise from the agent's working directory. A call outside any workspace reports how to initialize one. Servers started with `--workspace`, and all HTTP servers, serve exactly one workspace and reject others.
+
 Read-only stdio and all HTTP servers expose only query/status/list, reject write tools and disable auto-sync. Queries can still call the configured query embedding/reranker. HTTP listens only on loopback, retains Host/Origin checks and prints its URL to stderr. Its default port is ephemeral. A tunnel may launch `rag mcp --read-only --workspace /absolute/project` or connect to the optional HTTP server; tunnel installation and account configuration are external to this repository.
 
-`rag connect claude` calls the Claude CLI with local scope from the workspace directory. `rag connect codex` merges the project's `.codex/config.toml` using TOML parsing, retaining unrelated settings and other servers. TOML comments/formatting may be normalized. Both pin the absolute binary and workspace. Repeated identical registrations are retained; conflicting project entries require `--replace`. Codex loads project configuration only for trusted projects. Reload the Agent after connecting. Registration tests do not establish actual Agent tool use.
+`rag install` is the usual way to connect agents. `rag connect claude|codex` instead registers a single project: `rag connect claude` calls the Claude CLI with local scope from the workspace directory. `rag connect codex` merges the project's `.codex/config.toml` using TOML parsing, retaining unrelated settings and other servers. TOML comments/formatting may be normalized. Both pin the absolute binary and workspace. Repeated identical registrations are retained; conflicting project entries require `--replace`. Codex loads project configuration only for trusted projects. Reload the Agent after connecting. Registration tests do not establish actual Agent tool use.
 
 ## Configuration and retrieval
 

@@ -1,23 +1,21 @@
 package command
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/Ownera1/rag-go/internal/model"
-	"github.com/Ownera1/rag-go/internal/provider"
 	"github.com/Ownera1/rag-go/internal/store"
 	"github.com/Ownera1/rag-go/internal/workspace"
-	"golang.org/x/term"
+	"github.com/Ownera1/rag-go/pkg/rag"
 )
 
 func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io.Writer) error {
@@ -25,13 +23,10 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 	fs.SetOutput(stderr)
 	explicit := fs.String("workspace", "", "workspace root")
 	docs := fs.String("docs", "documents", "single documents directory")
-	kind := fs.String("embedding-type", "voyage", "voyage or openai")
-	name := fs.String("model", "voyage-4-lite", "embedding model")
-	dimensions := fs.Int("dimensions", 1024, "embedding dimensions")
-	base := fs.String("base-url", "https://api.voyageai.com/v1", "embedding endpoint prefix")
-	keyEnv := fs.String("api-key-env", "VOYAGE_API_KEY", "credential environment name; empty for no authentication")
-	offline := fs.Bool("offline", false, "skip embedding probe")
-	if err := fs.Parse(ReorderFlags(args, map[string]bool{"offline": true, "h": true, "help": true})); err != nil {
+	providerOptions := addProviderFlags(fs)
+	offline := fs.Bool("offline", false, "skip embedding probe and initial indexing")
+	noSync := fs.Bool("no-sync", false, "skip initial indexing of existing documents")
+	if err := fs.Parse(ReorderFlags(args, map[string]bool{"offline": true, "no-sync": true, "h": true, "help": true})); err != nil {
 		return err
 	}
 	if fs.NArg() > 1 || fs.NArg() == 1 && *explicit != "" {
@@ -68,7 +63,13 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 	if err != nil {
 		return err
 	}
-	defer release()
+	// Released early before the initial sync, which takes its own lock.
+	locked := true
+	defer func() {
+		if locked {
+			release()
+		}
+	}()
 	cfg := model.DefaultConfig()
 	fresh := false
 	path := filepath.Join(storeDir, "config.json")
@@ -82,103 +83,40 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 			return err
 		}
 	}
-	values, err := workspace.Credentials(root)
+	// A new workspace copies the user-wide defaults from rag install, so later
+	// global changes never invalidate an existing index.
+	global, installed, err := loadGlobalConfig()
+	if err != nil {
+		return err
+	}
+	if fresh && installed {
+		cfg = global
+	}
+	local, err := workspace.LocalCredentials(root)
+	if err != nil {
+		return err
+	}
+	shared, err := workspace.GlobalCredentials()
 	if err != nil {
 		return err
 	}
 	supplied := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { supplied[f.Name] = true })
-	inputFile, ok := in.(*os.File)
-	interactive := ok && term.IsTerminal(int(inputFile.Fd()))
-	reader := bufio.NewReader(in)
-	ask := func(label, current string) (string, error) {
-		fmt.Fprintf(stderr, "%s [%s]: ", label, current)
-		s, e := reader.ReadString('\n')
-		if e != nil && !errors.Is(e, io.EOF) {
-			return "", e
-		}
-		if s = strings.TrimSpace(s); s == "" {
-			s = current
-		}
-		return s, nil
-	}
-	if fresh && interactive {
+	t := newTerminal(in, stderr)
+	if fresh && t.interactive && !installed {
 		if !supplied["docs"] {
-			*docs, err = ask("Documents directory", *docs)
-			if err != nil {
+			if *docs, err = t.ask("Documents directory", *docs); err != nil {
 				return err
 			}
 		}
-		if !supplied["embedding-type"] {
-			*kind, err = ask("Embedding provider (voyage/openai)", *kind)
-			if err != nil {
-				return err
-			}
-		}
-		if *kind == "openai" {
-			if !supplied["model"] {
-				*name = ""
-			}
-			if !supplied["base-url"] {
-				*base = ""
-			}
-			if !supplied["api-key-env"] {
-				*keyEnv = ""
-			}
-		}
-		if !supplied["model"] {
-			*name, err = ask("Embedding model", *name)
-			if err != nil {
-				return err
-			}
-		}
-		if *kind == "openai" {
-			if !supplied["base-url"] {
-				*base, err = ask("Embedding API prefix", *base)
-				if err != nil {
-					return err
-				}
-			}
-			if !supplied["dimensions"] {
-				v, e := ask("Embedding dimensions", strconv.Itoa(*dimensions))
-				if e != nil {
-					return e
-				}
-				*dimensions, err = strconv.Atoi(v)
-				if err != nil {
-					return err
-				}
-			}
-			if !supplied["api-key-env"] {
-				*keyEnv, err = ask("API key environment name", *keyEnv)
-				if err != nil {
-					return err
-				}
-			}
+		if err = providerOptions.prompt(t, supplied); err != nil {
+			return err
 		}
 	}
 	if fresh || supplied["docs"] {
 		cfg.Documents = *docs
 	}
-	if fresh {
-		cfg.Embedding = model.ProviderConfig{Type: *kind, Model: *name, Dimensions: *dimensions, BaseURL: *base, APIKeyEnv: *keyEnv}
-	} else {
-		if supplied["embedding-type"] {
-			cfg.Embedding.Type = *kind
-		}
-		if supplied["model"] {
-			cfg.Embedding.Model = *name
-		}
-		if supplied["dimensions"] {
-			cfg.Embedding.Dimensions = *dimensions
-		}
-		if supplied["base-url"] {
-			cfg.Embedding.BaseURL = *base
-		}
-		if supplied["api-key-env"] {
-			cfg.Embedding.APIKeyEnv = *keyEnv
-		}
-	}
+	providerOptions.apply(&cfg.Embedding, fresh && !installed, supplied)
 	if err = cfg.Validate(); err != nil {
 		return err
 	}
@@ -190,6 +128,7 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 	if rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return errors.New("documents cannot be inside .rag-go")
 	}
+	keys := map[string]string{}
 	for _, p := range []model.ProviderConfig{cfg.Embedding, cfg.Reranker} {
 		name := p.APIKeyEnv
 		if name == "" {
@@ -198,22 +137,27 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 		if !workspace.EnvName.MatchString(name) {
 			return errors.New("invalid apiKeyEnv")
 		}
+		// Persist environment and typed keys in the workspace for agents that
+		// do not inherit the shell environment, unless rag install holds one.
 		value := os.Getenv(name)
+		if value != "" && shared[name] == "" {
+			local[name] = value
+		}
 		if value == "" {
-			value = values[name]
+			value = local[name]
 		}
-		if value == "" && interactive {
-			fmt.Fprintf(stderr, "%s (hidden): ", name)
-			b, e := term.ReadPassword(int(inputFile.Fd()))
-			fmt.Fprintln(stderr)
-			if e != nil {
-				return e
+		if value == "" {
+			value = shared[name]
+		}
+		if value == "" && t.interactive {
+			if value, err = t.secret(name); err != nil {
+				return err
 			}
-			value = string(b)
+			if value != "" {
+				local[name] = value
+			}
 		}
-		if value != "" {
-			values[name] = value
-		}
+		keys[name] = value
 	}
 	// Refuse unknown existing data before publishing any configuration changes.
 	dbPath, e := store.ResolvePath(storeDir)
@@ -239,8 +183,8 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 	if err = workspace.AtomicJSON(path, cfg); err != nil {
 		return err
 	}
-	if len(values) > 0 {
-		if err = workspace.AtomicJSON(filepath.Join(storeDir, "credentials.json"), values); err != nil {
+	if len(local) > 0 {
+		if err = workspace.AtomicJSON(filepath.Join(storeDir, "credentials.json"), local); err != nil {
 			return err
 		}
 	}
@@ -255,20 +199,48 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 	checks := map[string]string{"embedding": "not checked (offline)"}
 	var problem error
 	if !*offline {
-		p, e := provider.NewHTTP(cfg.Embedding, cfg.HTTPTimeoutMs, 0)
-		if e == nil {
-			p.SetCredential(values[cfg.Embedding.APIKeyEnv])
-			_, e = p.EmbedQuery(ctx, "rag-go initialization probe")
-		}
+		checks["embedding"], problem = probe(ctx, cfg, keys[cfg.Embedding.APIKeyEnv])
+	}
+	release()
+	locked = false
+	report := map[string]any{"workspace": root, "documents": resolvedDocs, "created": fresh, "checks": checks}
+	if problem == nil && !*offline && !*noSync && hasDocuments(resolvedDocs) {
+		core, e := rag.Open(rag.Options{WorkspaceDir: root})
 		if e != nil {
-			checks["embedding"] = "failed"
-			problem = errors.New("embedding probe failed; check endpoint, credential, model and dimensions")
-		} else {
-			checks["embedding"] = "reachable; dimensions verified"
+			return e
+		}
+		r, e := core.Sync(ctx)
+		core.Close()
+		report["sync"] = r
+		if e != nil {
+			report["syncError"] = e.Error()
+			problem = e
 		}
 	}
-	if err = json.NewEncoder(out).Encode(map[string]any{"workspace": root, "documents": resolvedDocs, "created": fresh, "checks": checks}); err != nil {
+	if err = json.NewEncoder(out).Encode(report); err != nil {
 		return err
 	}
+	if fresh && !installed {
+		fmt.Fprintln(stderr, "Tip: run `rag install` once to reuse these settings in every project and connect Claude Code and Codex.")
+	}
 	return problem
+}
+
+// hasDocuments reports whether dir holds any visible file to index.
+func hasDocuments(dir string) bool {
+	found := false
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && p != dir && strings.HasPrefix(d.Name(), ".") {
+			return filepath.SkipDir
+		}
+		if d.Type().IsRegular() && !strings.HasPrefix(d.Name(), ".") {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
 }

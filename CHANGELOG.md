@@ -2,6 +2,9 @@
 
 ## v0.2.0 (unreleased)
 
+- `rag install` saves user-wide embedding defaults and the API key under `~/.config/rag-go/` after verifying the endpoint, and registers one workspace-agnostic `rag mcp` with Claude Code (user scope) and Codex (`~/.codex/config.toml`, editing only the rag-go table). `rag uninstall [--purge]` reverses it.
+- `rag init` copies the installed defaults without prompts and indexes existing documents; `--no-sync` skips indexing. Credentials resolve from the environment, then the workspace, then the user-wide file.
+- Stdio `rag mcp` without `--workspace` starts in any directory and resolves the workspace per call from a new optional `workspace` tool argument or the working directory. Pinned and HTTP servers reject other workspaces.
 - Optional Zotero Local API metadata catalog with full snapshots, content hashes, normalized creators/tags/collections, soft deletion, and preserved manual orphan links.
 - Stable bibliographic document keys, exact attachment/unique DOI matching, portable Manifest references, query metadata, and prefilters for BM25/Chinese/vector recall.
 - `rag zotero sync/status/match/link/links` and local writable MCP metadata tools; read-only HTTP/stdio retain query/status/list only.

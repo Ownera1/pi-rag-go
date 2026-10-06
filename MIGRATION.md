@@ -14,25 +14,25 @@ v0.2 changes the store boundary, command surface and MCP registration. Existing 
 
 3. Prepare a single documents root. Reuse existing canonical packages containing `rag-source.json`, TEI/JATS, normalized blocks JSON or recognizable MinerU exports. You can copy complete packages from the old `prepared/` cache, including their manifest and canonical content, without copying `conversion.json`. The original global store remains untouched. If documents are still PDFs, convert them with an external tool first.
 
-4. Initialize the workspace and rebuild:
+4. Install once, then initialize the workspace:
 
    ```sh
+   rag install
    cd /absolute/my-project
    rag init --docs /absolute/converted-papers
-   rag sync
    rag status
    ```
 
-   Each workspace has its own provider configuration, credentials and `.rag-go` index. Existing environment credentials can be reused. Do not paste secrets into project configuration or registration files.
+   `rag install` stores user-wide provider defaults and the API key under `~/.config/rag-go/`. `rag init` copies those defaults into the workspace and indexes existing documents. Each workspace keeps its own configuration copy and `.rag-go` index. Existing environment credentials can be reused. Do not paste secrets into project configuration or registration files.
 
-5. Reconnect Agents:
+5. Reconnect Agents. `rag install` already registered one workspace-agnostic `rag mcp` with Claude Code (user scope) and Codex (`~/.codex/config.toml`); a legacy v0.1 user-level `rag-go` entry is replaced. To pin a single project instead:
 
    ```sh
    rag connect claude --replace
    rag connect codex --replace
    ```
 
-   Claude receives a local project registration; Codex receives a project configuration override. Registrations use the absolute v0.2 binary and workspace. Legacy user-level HTTP registrations may remain outside this project; remove them deliberately through the respective client if no other workspace uses them. Reload the Agent and call `rag_status`, then query a known passage.
+   Claude then receives a local project registration and Codex a project configuration override, both using the absolute v0.2 binary and workspace. Reload the Agent and call `rag_status`, then query a known passage.
 
 6. Confirm document counts, titles, provenance and known query results before deciding whether to archive old stores. Unknown pages stay unknown. A local test/registration is separate from actual model-provider and Agent acceptance.
 
