@@ -17,15 +17,21 @@ func Store(root string) string { return filepath.Join(root, ".rag-go") }
 
 // Discover uses the nearest workspace. An explicit path never searches parents.
 func Discover(explicit string) (string, error) {
-	root := explicit
-	if root == "" {
-		var err error
-		root, err = os.Getwd()
-		if err != nil {
-			return "", err
-		}
+	if explicit != "" {
+		return discover(explicit, false)
 	}
-	root, err := filepath.Abs(root)
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return discover(dir, true)
+}
+
+// DiscoverFrom returns the nearest workspace at or above dir.
+func DiscoverFrom(dir string) (string, error) { return discover(dir, true) }
+
+func discover(start string, walk bool) (string, error) {
+	root, err := filepath.Abs(start)
 	if err != nil {
 		return "", err
 	}
@@ -40,8 +46,11 @@ func Discover(explicit string) (string, error) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return "", err
 		}
-		if explicit != "" || filepath.Dir(root) == root {
-			return "", errors.New("workspace is not initialized; run rag init")
+		if !walk {
+			return "", fmt.Errorf("no rag-go workspace at %s; run rag init", start)
+		}
+		if filepath.Dir(root) == root {
+			return "", fmt.Errorf("no rag-go workspace at or above %s; run rag init", start)
 		}
 		root = filepath.Dir(root)
 	}
@@ -111,8 +120,52 @@ func AtomicFile(path string, b []byte, mode os.FileMode) error {
 
 var EnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// GlobalDir holds user-wide defaults written by rag install. RAG_GO_CONFIG_DIR
+// overrides it; otherwise XDG_CONFIG_HOME/rag-go or ~/.config/rag-go.
+func GlobalDir() (string, error) {
+	if dir := os.Getenv("RAG_GO_CONFIG_DIR"); dir != "" {
+		return filepath.Abs(dir)
+	}
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return filepath.Join(dir, "rag-go"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "rag-go"), nil
+}
+
+// Credentials resolves workspace credentials over user-wide ones. Environment
+// variables still take precedence inside providers.
 func Credentials(root string) (map[string]string, error) {
-	path := filepath.Join(Store(root), "credentials.json")
+	values, err := GlobalCredentials()
+	if err != nil {
+		return nil, err
+	}
+	local, err := LocalCredentials(root)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range local {
+		values[k] = v
+	}
+	return values, nil
+}
+
+func LocalCredentials(root string) (map[string]string, error) {
+	return readCredentials(filepath.Join(Store(root), "credentials.json"))
+}
+
+func GlobalCredentials() (map[string]string, error) {
+	dir, err := GlobalDir()
+	if err != nil {
+		return nil, err
+	}
+	return readCredentials(filepath.Join(dir, "credentials.json"))
+}
+
+func readCredentials(path string) (map[string]string, error) {
 	st, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]string{}, nil
@@ -121,7 +174,7 @@ func Credentials(root string) (map[string]string, error) {
 		return nil, err
 	}
 	if !st.Mode().IsRegular() || st.Mode().Perm()&0077 != 0 {
-		return nil, errors.New("credentials.json must be a regular file with permissions 0600")
+		return nil, fmt.Errorf("%s must be a regular file with permissions 0600", path)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -129,7 +182,7 @@ func Credentials(root string) (map[string]string, error) {
 	}
 	values := map[string]string{}
 	if json.Unmarshal(b, &values) != nil {
-		return nil, errors.New("invalid credentials.json")
+		return nil, fmt.Errorf("invalid %s", path)
 	}
 	for key := range values {
 		if !EnvName.MatchString(key) {
