@@ -12,16 +12,19 @@ type Block struct {
 }
 
 type Document struct {
-	Replaces      []string `json:"-"`
-	ID            string   `json:"id"`
-	SourcePath    string   `json:"sourcePath,omitempty"`
-	Title         string   `json:"title,omitempty"`
-	ParserVersion string   `json:"parserVersion"`
-	Path          string   `json:"path"`
-	Hash          string   `json:"hash"`
-	Size          int64    `json:"size"`
-	Format        string   `json:"format"`
-	Blocks        []Block  `json:"blocks"`
+	DOI           string           `json:"doi,omitempty"`
+	DocumentKey   string           `json:"documentKey,omitempty"`
+	Zotero        *ZoteroReference `json:"zotero,omitempty"`
+	Replaces      []string         `json:"-"`
+	ID            string           `json:"id"`
+	SourcePath    string           `json:"sourcePath,omitempty"`
+	Title         string           `json:"title,omitempty"`
+	ParserVersion string           `json:"parserVersion"`
+	Path          string           `json:"path"`
+	Hash          string           `json:"hash"`
+	Size          int64            `json:"size"`
+	Format        string           `json:"format"`
+	Blocks        []Block          `json:"blocks"`
 }
 
 type Chunk struct {
@@ -43,33 +46,36 @@ type Chunk struct {
 }
 
 type Hit struct {
-	Chunk  Chunk    `json:"chunk"`
-	BM25   float64  `json:"bm25"`
-	Vector float64  `json:"vector"`
-	Hybrid float64  `json:"hybrid"`
-	Rerank *float64 `json:"rerank,omitempty"`
+	Metadata *ZoteroMetadata `json:"metadata,omitempty"`
+	Chunk    Chunk           `json:"chunk"`
+	BM25     float64         `json:"bm25"`
+	Vector   float64         `json:"vector"`
+	Hybrid   float64         `json:"hybrid"`
+	Rerank   *float64        `json:"rerank,omitempty"`
 }
 
 type QueryOptions struct {
-	DisableSync   bool     `json:"disable_sync,omitempty"`
-	TopK          int      `json:"top_k"`
-	CandidateTopK int      `json:"candidate_top_k"`
-	Alpha         *float64 `json:"alpha,omitempty"`
-	Mode          string   `json:"mode,omitempty"`
-	DisableRerank bool     `json:"disable_rerank,omitempty"`
-	RequireRerank bool     `json:"require_rerank,omitempty"`
+	Filter        *MetadataFilter `json:"filter,omitempty"`
+	DisableSync   bool            `json:"disable_sync,omitempty"`
+	TopK          int             `json:"top_k"`
+	CandidateTopK int             `json:"candidate_top_k"`
+	Alpha         *float64        `json:"alpha,omitempty"`
+	Mode          string          `json:"mode,omitempty"`
+	DisableRerank bool            `json:"disable_rerank,omitempty"`
+	RequireRerank bool            `json:"require_rerank,omitempty"`
 }
 
 type QueryResult struct {
-	Freshness string       `json:"freshness"`
-	Sync      *IndexResult `json:"sync,omitempty"`
-	SyncError string       `json:"syncError,omitempty"`
-	Query     string       `json:"query"`
-	Hits      []Hit        `json:"hits"`
-	Method    string       `json:"method"`
-	Degraded  string       `json:"degraded,omitempty"`
-	ElapsedMs float64      `json:"elapsedMs"`
-	Usage     QueryUsage   `json:"usage"`
+	MetadataSyncedAt string       `json:"metadataSyncedAt,omitempty"`
+	Freshness        string       `json:"freshness"`
+	Sync             *IndexResult `json:"sync,omitempty"`
+	SyncError        string       `json:"syncError,omitempty"`
+	Query            string       `json:"query"`
+	Hits             []Hit        `json:"hits"`
+	Method           string       `json:"method"`
+	Degraded         string       `json:"degraded,omitempty"`
+	ElapsedMs        float64      `json:"elapsedMs"`
+	Usage            QueryUsage   `json:"usage"`
 }
 
 // Token counts are estimates; calls count logical provider calls, excluding retries.
@@ -104,6 +110,7 @@ type IndexResult struct {
 }
 
 type Status struct {
+	Zotero         *ZoteroStatus `json:"zotero,omitempty"`
 	WorkspaceDir   string        `json:"workspaceDir"`
 	DocumentsRoot  string        `json:"documentsRoot"`
 	StoreDir       string        `json:"storeDir"`
@@ -149,6 +156,7 @@ type IndexingConfig struct {
 }
 
 type Config struct {
+	Zotero          *ZoteroConfig  `json:"zotero,omitempty"`
 	Documents       string         `json:"documents"`
 	Embedding       ProviderConfig `json:"embedding"`
 	Reranker        ProviderConfig `json:"reranker"`

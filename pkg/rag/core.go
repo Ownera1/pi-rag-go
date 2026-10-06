@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Ownera1/rag-go/internal/catalog"
 	"github.com/Ownera1/rag-go/internal/document"
 	"github.com/Ownera1/rag-go/internal/model"
 	"github.com/Ownera1/rag-go/internal/provider"
@@ -53,16 +54,17 @@ type Core struct {
 }
 
 type session struct {
-	workspace string
-	root      string
-	docs      string
-	cfg       Config
-	state     savedState
-	db        *store.DB
-	embedder  EmbeddingProvider
-	reranker  Reranker
-	readOnly  bool
-	release   func()
+	bibliography *catalog.DB
+	workspace    string
+	root         string
+	docs         string
+	cfg          Config
+	state        savedState
+	db           *store.DB
+	embedder     EmbeddingProvider
+	reranker     Reranker
+	readOnly     bool
+	release      func()
 }
 
 func DefaultConfig() Config { return model.DefaultConfig() }
@@ -164,6 +166,10 @@ func (c *Core) operation(ctx context.Context, write bool) (*session, error) {
 }
 
 func (s *session) close() {
+	if s.bibliography != nil {
+		_ = s.bibliography.Close()
+		s.bibliography = nil
+	}
 	if s.db != nil {
 		_ = s.db.Close()
 		s.db = nil
@@ -311,6 +317,11 @@ func (c *Core) sync(ctx context.Context, automatic bool) (IndexResult, error) {
 	if err = s.record(snap, r); err != nil {
 		return r, err
 	}
+	if r.Failed == 0 && ctx.Err() == nil {
+		if _, err = s.reconcileZotero(ctx); err != nil {
+			return r, err
+		}
+	}
 	if ctx.Err() != nil {
 		return r, ctx.Err()
 	}
@@ -330,6 +341,16 @@ func (c *Core) Query(ctx context.Context, text string, opts QueryOptions) (out Q
 	if err = validateQuery(s.cfg, text, opts, s.reranker != nil); err != nil {
 		s.close()
 		return out, err
+	}
+	if opts.Filter != nil {
+		db, e := s.openCatalog(false)
+		if e != nil || db == nil {
+			s.close()
+			if e != nil {
+				return out, e
+			}
+			return out, errors.New("metadata filter requires a catalog; run rag zotero sync")
+		}
 	}
 	if err = s.compatible(ctx, s.db); err != nil {
 		s.close()
@@ -395,6 +416,17 @@ func (c *Core) Status(ctx context.Context) (Status, error) {
 	}
 	defer s.close()
 	status := Status{WorkspaceDir: s.workspace, StoreDir: s.root, DocumentsRoot: s.docs, ReadOnly: c.opts.ReadOnly, FailedFiles: s.state.FailedFiles, LastSync: s.state.LastSync, EmbeddingModel: s.cfg.Embedding.Model, Dimensions: s.cfg.Embedding.Dimensions}
+	cat, e := s.openCatalog(false)
+	if e != nil {
+		return status, e
+	}
+	if cat != nil {
+		v, e := cat.Status(ctx)
+		if e != nil {
+			return status, e
+		}
+		status.Zotero = &v
+	}
 	if !s.state.LastAttemptAt.IsZero() {
 		status.LastAttemptAt = s.state.LastAttemptAt.UTC().Format(time.RFC3339Nano)
 	}

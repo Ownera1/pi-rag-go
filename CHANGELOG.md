@@ -2,6 +2,10 @@
 
 ## v0.2.0 (unreleased)
 
+- Optional Zotero Local API metadata catalog with full snapshots, content hashes, normalized creators/tags/collections, soft deletion, and preserved manual orphan links.
+- Stable bibliographic document keys, exact attachment/unique DOI matching, portable Manifest references, query metadata, and prefilters for BM25/Chinese/vector recall.
+- `rag zotero sync/status/match/link/links` and local writable MCP metadata tools; read-only HTTP/stdio retain query/status/list only.
+
 - Workspace-scoped `.rag-go` configuration and indexes, one documents root, direct Core CLI and stdio MCP.
 - Query-triggered incremental synchronization with explicit freshness, persisted failures and a 60-second retry cooldown.
 - Operation-scoped cross-process reader/writer locks, transactional canonical replacement and atomic rebuild publication.

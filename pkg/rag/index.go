@@ -386,5 +386,8 @@ func (c *session) rebuild(ctx context.Context) (result IndexResult, err error) {
 	if err = c.publish(ctx, db, stageDir); err != nil {
 		return result, err
 	}
+	if _, err = c.reconcileZotero(ctx); err != nil {
+		return result, err
+	}
 	return result, c.record(snap, result)
 }

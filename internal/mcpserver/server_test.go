@@ -56,7 +56,7 @@ func checkTools(t *testing.T, ctx context.Context, session *mcp.ClientSession, r
 	sort.Strings(names)
 	want := []string{"rag_list_documents", "rag_query", "rag_status"}
 	if !readOnly {
-		want = append(want, "rag_rebuild", "rag_sync")
+		want = append(want, "rag_rebuild", "rag_sync", "rag_zotero_sync", "rag_zotero_match", "rag_zotero_link")
 		sort.Strings(want)
 	}
 	raw, _ := json.Marshal(names)
@@ -71,7 +71,7 @@ func checkTools(t *testing.T, ctx context.Context, session *mcp.ClientSession, r
 		}
 	}
 	if readOnly {
-		for _, tool := range []string{"rag_sync", "rag_rebuild", "rag_index", "rag_clear", "rag_cleanup"} {
+		for _, tool := range []string{"rag_sync", "rag_rebuild", "rag_zotero_sync", "rag_zotero_match", "rag_zotero_link", "rag_index", "rag_clear", "rag_cleanup"} {
 			r, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: map[string]any{"confirm": true}})
 			if err == nil && !r.IsError {
 				t.Fatal("readonly allowed " + tool)

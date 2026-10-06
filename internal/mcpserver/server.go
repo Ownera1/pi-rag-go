@@ -31,14 +31,15 @@ func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 		})
 	}
 	type queryIn struct {
-		Query         string   `json:"query"`
-		TopK          int      `json:"top_k,omitempty"`
-		CandidateTopK int      `json:"candidate_top_k,omitempty"`
-		Alpha         *float64 `json:"alpha,omitempty"`
-		Mode          string   `json:"mode,omitempty"`
-		DisableSync   bool     `json:"disable_sync,omitempty"`
-		DisableRerank bool     `json:"disable_rerank,omitempty"`
-		RequireRerank bool     `json:"require_rerank,omitempty"`
+		Filter        *rag.MetadataFilter `json:"filter,omitempty"`
+		Query         string              `json:"query"`
+		TopK          int                 `json:"top_k,omitempty"`
+		CandidateTopK int                 `json:"candidate_top_k,omitempty"`
+		Alpha         *float64            `json:"alpha,omitempty"`
+		Mode          string              `json:"mode,omitempty"`
+		DisableSync   bool                `json:"disable_sync,omitempty"`
+		DisableRerank bool                `json:"disable_rerank,omitempty"`
+		RequireRerank bool                `json:"require_rerank,omitempty"`
 	}
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -47,6 +48,7 @@ func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: core.ReadOnly()},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in queryIn) (*mcp.CallToolResult, rag.QueryResult, error) {
 		r, e := core.Query(ctx, in.Query, rag.QueryOptions{
+			Filter:        in.Filter,
 			DisableSync:   in.DisableSync,
 			TopK:          in.TopK,
 			CandidateTopK: in.CandidateTopK,
@@ -82,6 +84,28 @@ func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 	})
 
 	if !core.ReadOnly() {
+		mcp.AddTool(s, &mcp.Tool{Name: "rag_zotero_sync", Description: "Read a complete Zotero Local API metadata snapshot into this workspace catalog; no document embedding or Zotero writes"}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.ZoteroSyncResult, error) {
+			r, e := core.SyncZotero(ctx, nil)
+			if e != nil {
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: e.Error()}}}, r, nil
+			}
+			return nil, r, e
+		})
+		mcp.AddTool(s, &mcp.Tool{Name: "rag_zotero_match", Description: "Match indexed documents to cached Zotero metadata; fuzzy title matches are candidates only"}, func(ctx context.Context, _ *mcp.CallToolRequest, _ empty) (*mcp.CallToolResult, rag.ZoteroMatchResult, error) {
+			r, e := core.MatchZotero(ctx)
+			if e != nil {
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: e.Error()}}}, r, nil
+			}
+			return nil, r, e
+		})
+		type linkIn struct {
+			Path      string              `json:"path"`
+			Reference rag.ZoteroReference `json:"reference"`
+		}
+		mcp.AddTool(s, &mcp.Tool{Name: "rag_zotero_link", Description: "Save a manually confirmed, locked document-to-Zotero association in the catalog"}, func(ctx context.Context, _ *mcp.CallToolRequest, in linkIn) (*mcp.CallToolResult, *rag.ZoteroMetadata, error) {
+			r, e := core.LinkZotero(ctx, in.Path, in.Reference, false)
+			return nil, r, e
+		})
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        "rag_sync",
 			Description: "Synchronize this workspace documents directory",

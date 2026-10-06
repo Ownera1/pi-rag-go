@@ -1,10 +1,14 @@
 # rag-go
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 A workspace-scoped local retrieval engine for Agents. Documents are loaded into canonical body blocks, chunked, embedded, and searched with SQLite FTS5 + sqlite-vec. Each workspace owns its configuration and index. Multiple Agent processes share it through operation-scoped locks.
 
 PDF extraction, OCR and layout recovery happen upstream, using tools such as MinerU Desktop. rag-go reads their Markdown or structured JSON output and keeps source provenance when it is available.
 
 ## Quick start
+
+The workspace interface described here targets v0.2. Until v0.2 is published, released installers still provide v0.1; use the source build below to try this branch. See [migration](MIGRATION.md) before upgrading an existing installation.
 
 Install a published native macOS/Linux binary with Homebrew:
 
@@ -18,8 +22,6 @@ rag query 'channel estimation'
 rag connect claude
 rag connect codex
 ```
-
-The workspace interface described here targets v0.2. Until v0.2 is published, released installers still provide v0.1; use the source build below to try this branch. See [migration](MIGRATION.md) before upgrading an existing installation.
 
 `rag init [workspace] --docs PATH` defaults to the current directory and `./documents`. An explicit external documents directory is supported, including an existing directory containing one MinerU output folder per paper:
 
@@ -45,6 +47,7 @@ my-project/
     ├── config.json
     ├── credentials.json        # optional, private
     ├── state.json
+    ├── catalog.db              # optional, durable Zotero metadata and links
     ├── .lock
     ├── rag.db                  # created on first sync
     ├── active.json             # published by rebuild
@@ -93,18 +96,20 @@ An optional source manifest uses the existing format:
 ## MCP and Agent connections
 
 ```sh
-rag mcp                                      # local stdio, five tools
+rag mcp                                      # local stdio, eight tools
 rag mcp --read-only                          # stdio, three read tools
 rag mcp --transport http --listen 127.0.0.1:7331  # optional foreground, read-only
 ```
 
-Local tools are `rag_query`, `rag_status`, `rag_list_documents`, `rag_sync` and `rag_rebuild`. Query arguments retain `query`, `mode`, `top_k`, `candidate_top_k`, `alpha`, `disable_rerank`, and `require_rerank`; `disable_sync=true` searches without synchronization. Local auto-sync queries are not marked read-only.
+Local tools are `rag_query`, `rag_status`, `rag_list_documents`, `rag_sync`, `rag_rebuild`, `rag_zotero_sync`, `rag_zotero_match` and `rag_zotero_link`. Query arguments retain `query`, `mode`, `top_k`, `candidate_top_k`, `alpha`, `disable_rerank`, and `require_rerank`; `disable_sync=true` searches without synchronization. Optional `filter` applies cached Zotero metadata before recall. Local auto-sync queries are not marked read-only.
 
 Read-only stdio and all HTTP servers expose only query/status/list, reject write tools and disable auto-sync. Queries can still call the configured query embedding/reranker. HTTP listens only on loopback, retains Host/Origin checks and prints its URL to stderr. Its default port is ephemeral. A tunnel may launch `rag mcp --read-only --workspace /absolute/project` or connect to the optional HTTP server; tunnel installation and account configuration are external to this repository.
 
 `rag connect claude` calls the Claude CLI with local scope from the workspace directory. `rag connect codex` merges the project's `.codex/config.toml` using TOML parsing, retaining unrelated settings and other servers. TOML comments/formatting may be normalized. Both pin the absolute binary and workspace. Repeated identical registrations are retained; conflicting project entries require `--replace`. Codex loads project configuration only for trusted projects. Reload the Agent after connecting. Registration tests do not establish actual Agent tool use.
 
 ## Configuration and retrieval
+
+Optional Zotero Local API integration uses a persistent `catalog.db`, independent of rebuildable index generations. Full metadata snapshots, exact attachment/unique DOI matches, locked manual links, portable Manifest references, and year/tag/collection prefilters are available through `rag zotero` and `rag query`. Metadata updates do not re-embed body content. See [Zotero setup, commands and verification](ZOTERO.md).
 
 See [config.example.json](config.example.json). Configuration and indexing state are separate. `documents` is relative to the workspace unless absolute. `excludePatterns` uses the existing Gitignore-style matching. Hidden directories, build/cache directories and `.rag-go` are excluded from source scanning.
 
@@ -142,4 +147,4 @@ rag eval --dataset evaluation/sample/questions.jsonl --modes bm25,vector,hybrid 
 
 Evaluation calls Core directly, requires a synchronized compatible index and never auto-syncs during the run. Reports retain Recall@K, MRR, p50/p95 latency, failures, degradation, usage and optional cost estimates. The sample is synthetic; see [evaluation guidance](evaluation/README.md).
 
-`pkg/rag` exposes `Open(Options{WorkspaceDir, ReadOnly, Embedder, Reranker})`, `Core.Sync`, `Query`, `Status`, `ListDocuments`, `Rebuild`, `Cleanup`, `Close`, and `DefaultConfig`. Methods accept `context.Context`; injected providers must support concurrent calls. Core contains no MCP or external document-extraction dependency.
+`pkg/rag` exposes `Open(Options{WorkspaceDir, ReadOnly, Embedder, Reranker})`, `Core.Sync`, `Query`, `Status`, `ListDocuments`, `Rebuild`, `Cleanup`, `SyncZotero`, `MatchZotero`, `LinkZotero`, `ZoteroStatus`, `ZoteroLinks`, `Close`, and `DefaultConfig`. Methods accept `context.Context`; injected providers must support concurrent calls. Core contains no MCP or external document-extraction dependency.

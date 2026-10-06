@@ -126,6 +126,11 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions) (o
 		return out, errors.New("reranker required but unavailable")
 	}
 	out.Method = mode
+	filtered, syncedAt, err := c.queryMetadata(ctx, opts.Filter)
+	if err != nil {
+		return out, err
+	}
+	out.MetadataSyncedAt = syncedAt
 	if c.db == nil {
 		return out, nil
 	}
@@ -145,12 +150,12 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions) (o
 	}
 	fts := []store.Match{}
 	if mode != "vector" {
-		fts, err = c.db.FTS(ctx, quotedQuery(query), 200)
+		fts, err = c.db.FTS(ctx, quotedQuery(query), 200, filtered)
 		if err != nil {
 			return out, err
 		}
 		if hanQuery, hasHan := searchtext.Query(query); hasHan {
-			fts, err = c.db.FTSHan(ctx, hanQuery, 200)
+			fts, err = c.db.FTSHan(ctx, hanQuery, 200, filtered)
 			if err != nil {
 				return out, err
 			}
@@ -175,7 +180,7 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions) (o
 			out.Degraded = "query embedding failed, BM25 only: " + err.Error()
 			out.Method = "bm25-fallback"
 		} else {
-			vec, e = c.db.Vectors(ctx, vector, min(200, max(recall*10, 100)))
+			vec, e = c.db.Vectors(ctx, vector, min(200, max(recall*10, 100)), filtered)
 			if e != nil {
 				return out, e
 			}
@@ -282,10 +287,16 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions) (o
 		hits = hits[:topK]
 	}
 	out.Hits = hits
+	if err = c.enrichMetadata(ctx, out.Hits); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
 func validateQuery(cfg Config, text string, opts QueryOptions, hasReranker bool) error {
+	if err := opts.Filter.Validate(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(text) == "" {
 		return errors.New("query is required")
 	}

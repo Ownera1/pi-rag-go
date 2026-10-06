@@ -3,6 +3,8 @@ package document
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -14,18 +16,21 @@ import (
 	"unicode/utf8"
 
 	"github.com/Ownera1/rag-go/internal/model"
+	"github.com/Ownera1/rag-go/internal/workspace"
 )
 
 const ParserVersion = "document-blocks-v3"
 const MaxDocumentBytes = 64 << 20
 
 type Manifest struct {
-	Version     int    `json:"version"`
-	Format      string `json:"format"`
-	ContentPath string `json:"contentPath"`
-	SourcePath  string `json:"sourcePath,omitempty"`
-	SourceHash  string `json:"sourceHash,omitempty"`
-	Title       string `json:"title,omitempty"`
+	DOI         string                 `json:"doi,omitempty"`
+	Zotero      *model.ZoteroReference `json:"zotero,omitempty"`
+	Version     int                    `json:"version"`
+	Format      string                 `json:"format"`
+	ContentPath string                 `json:"contentPath"`
+	SourcePath  string                 `json:"sourcePath,omitempty"`
+	SourceHash  string                 `json:"sourceHash,omitempty"`
+	Title       string                 `json:"title,omitempty"`
 }
 
 func readFile(path string) ([]byte, error) {
@@ -86,6 +91,7 @@ func Parse(ctx context.Context, path string) (model.Document, error) {
 		return model.Document{}, err
 	}
 	d := model.Document{ID: ShortHash(path), Path: path, Hash: ShortHash(string(b)), Size: int64(len(b)), Title: filepath.Base(path), ParserVersion: ParserVersion}
+	d.DocumentKey = contentKey(b)
 	if filepath.Base(path) == "rag-source.json" {
 		var m Manifest
 		dec := json.NewDecoder(bytes.NewReader(b))
@@ -99,6 +105,11 @@ func Parse(ctx context.Context, path string) (model.Document, error) {
 		if m.Version != 1 {
 			return d, errors.New("unsupported source manifest version")
 		}
+		if m.Zotero != nil {
+			if err = m.Zotero.Validate(); err != nil {
+				return d, err
+			}
+		}
 		content, err := localContent(filepath.Dir(path), m.ContentPath)
 		if err != nil {
 			return d, err
@@ -108,6 +119,12 @@ func Parse(ctx context.Context, path string) (model.Document, error) {
 			return d, err
 		}
 		d.Hash = ShortHash(string(b) + "\x00" + string(data))
+		d.DocumentKey = contentKey(data)
+		if key := sourceKey(m.SourceHash); key != "" {
+			d.DocumentKey = key
+		}
+		d.Zotero = m.Zotero
+		d.DOI = m.DOI
 		d.Size += int64(len(data))
 		d.SourcePath = m.SourcePath
 		if d.SourcePath != "" && !filepath.IsAbs(d.SourcePath) {
@@ -126,6 +143,51 @@ func Parse(ctx context.Context, path string) (model.Document, error) {
 	}
 	d.Blocks, err = parseBytes(ctx, path, b, d.Format)
 	return d, err
+}
+
+func contentKey(b []byte) string {
+	h := sha256.Sum256(b)
+	return "content:sha256:" + hex.EncodeToString(h[:])
+}
+
+func sourceKey(value string) string {
+	s := strings.ToLower(strings.TrimSpace(value))
+	algorithm := ""
+	if a, b, ok := strings.Cut(s, ":"); ok {
+		algorithm = a
+		s = b
+	}
+	if _, err := hex.DecodeString(s); err != nil {
+		return ""
+	}
+	if len(s) == 64 && (algorithm == "" || algorithm == "sha256") {
+		return "source:sha256:" + s
+	}
+	if len(s) == 32 && (algorithm == "" || algorithm == "md5") {
+		return "source:md5:" + s
+	}
+	return ""
+}
+
+func WriteZoteroReference(path string, ref model.ZoteroReference) error {
+	if err := ref.Validate(); err != nil {
+		return err
+	}
+	b, err := readFile(path)
+	if err != nil {
+		return err
+	}
+	var m Manifest
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err = dec.Decode(&m); err != nil {
+		return err
+	}
+	if m.Version != 1 {
+		return errors.New("unsupported source manifest version")
+	}
+	m.Zotero = &ref
+	return workspace.AtomicJSON(path, m)
 }
 
 func localContent(root, relative string) (string, error) {

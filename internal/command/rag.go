@@ -55,10 +55,13 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		args = append([]string{args[i]}, append(prefix, args[i+1:]...)...)
 	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "usage: rag init|sync|query|status|rebuild|clean|connect|mcp|eval|version [--workspace PATH] [options]")
+		fmt.Fprintln(out, "usage: rag init|sync|query|status|rebuild|clean|zotero|connect|mcp|eval|version [--workspace PATH] [options]")
 		return nil
 	}
 	cmd, rest := args[0], args[1:]
+	if cmd == "zotero" {
+		return Zotero(ctx, rest, out, errout)
+	}
 	if cmd == "version" {
 		fmt.Fprintf(out, "rag-go %s (%s)\n", Version, Commit)
 		return nil
@@ -82,8 +85,14 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 	fs.SetOutput(errout)
 	root := fs.String("workspace", "", "explicit workspace root")
 	opts := rag.QueryOptions{}
+	yearFrom, yearTo := 0, 0
+	var tags, collections stringList
 	keep, confirm, dryRun := 3, false, false
 	if cmd == "query" {
+		fs.IntVar(&yearFrom, "year-from", 0, "minimum publication year")
+		fs.IntVar(&yearTo, "year-to", 0, "maximum publication year")
+		fs.Var(&tags, "tag", "required Zotero tag; repeat for AND")
+		fs.Var(&collections, "collection", "required collection key; repeat for AND")
 		fs.StringVar(&opts.Mode, "mode", "hybrid", "hybrid, vector or bm25")
 		fs.IntVar(&opts.TopK, "top-k", 0, "returned hits")
 		fs.IntVar(&opts.CandidateTopK, "candidate-top-k", 0, "rerank candidate count")
@@ -101,6 +110,19 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 	if cmd != "query" && fs.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "year-from" || f.Name == "year-to" || f.Name == "tag" || f.Name == "collection" {
+			if opts.Filter == nil {
+				opts.Filter = &rag.MetadataFilter{Tags: tags, Collections: collections}
+			}
+			if f.Name == "year-from" {
+				opts.Filter.YearFrom = &yearFrom
+			}
+			if f.Name == "year-to" {
+				opts.Filter.YearTo = &yearTo
+			}
+		}
+	})
 	core, err := rag.Open(rag.Options{WorkspaceDir: *root})
 	if err != nil {
 		return err

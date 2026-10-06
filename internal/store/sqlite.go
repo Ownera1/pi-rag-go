@@ -44,7 +44,8 @@ func Open(path string, readOnly bool, dimensions int) (*DB, error) {
 	q := u.Query()
 	if readOnly {
 		q.Set("mode", "ro")
-		q.Set("_query_only", "1")
+		// mode=ro protects the main index while permitting connection-local TEMP
+		// tables for metadata prefilters. Nothing is attached or written to main.
 	} else {
 		q.Set("mode", "rwc")
 		q.Set("_foreign_keys", "1")
@@ -133,7 +134,78 @@ CREATE TABLE IF NOT EXISTS chunk_sources (
 );
 `, dim)
 	_, err := d.SQL.Exec(schema)
+	if err == nil {
+		err = d.ensureDocumentColumns()
+	}
 	return err
+}
+
+func (d *DB) documentColumns() (map[string]bool, error) {
+	rows, err := d.SQL.Query("PRAGMA table_info(files)")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, kind string
+		var def any
+		if err = rows.Scan(&cid, &name, &kind, &notnull, &def, &pk); err != nil {
+			return nil, err
+		}
+		out[name] = true
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) ensureDocumentColumns() error {
+	cols, err := d.documentColumns()
+	if err != nil {
+		return err
+	}
+	for _, name := range []string{"document_key", "source_path", "zotero_ref", "doi"} {
+		if !cols[name] {
+			if _, err = d.SQL.Exec("ALTER TABLE files ADD COLUMN " + name + " TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (d *DB) Documents(ctx context.Context) ([]model.CatalogDocument, error) {
+	cols, err := d.documentColumns()
+	if err != nil {
+		return nil, err
+	}
+	q := "SELECT path,COALESCE(title,''),'' AS document_key,'' AS source_path,'' AS zotero_ref,'' AS doi FROM files"
+	if cols["document_key"] && cols["source_path"] && cols["zotero_ref"] && cols["doi"] {
+		q = "SELECT path,COALESCE(title,''),document_key,source_path,zotero_ref,doi FROM files"
+	}
+	rows, err := d.SQL.QueryContext(ctx, q+" ORDER BY path")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.CatalogDocument{}
+	for rows.Next() {
+		var v model.CatalogDocument
+		var ref string
+		if err = rows.Scan(&v.Path, &v.Title, &v.Key, &v.SourcePath, &ref, &v.DOI); err != nil {
+			return nil, err
+		}
+		if ref != "" {
+			if err = json.Unmarshal([]byte(ref), &v.Zotero); err != nil {
+				return nil, err
+			}
+		}
+		if v.Key == "" {
+			v.Key = "path:" + v.Path
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 func ResolvePath(root string) (string, error) {
@@ -256,6 +328,14 @@ func (d *DB) Replace(ctx context.Context, doc model.Document, chunks []model.Chu
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	ref := ""
+	if doc.Zotero != nil {
+		b, err := json.Marshal(doc.Zotero)
+		if err != nil {
+			return err
+		}
+		ref = string(b)
+	}
 	for i, c := range chunks {
 		r, err := tx.ExecContext(ctx, `
 INSERT INTO chunks (
@@ -285,8 +365,8 @@ INSERT INTO chunks (
 		}
 	}
 	if _, e = tx.ExecContext(ctx, `
-INSERT INTO files (path, hash, chunks, indexed, size, embedded, document_id, title)
-VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+INSERT INTO files (path, hash, chunks, indexed, size, embedded, document_id, title, document_key, source_path, zotero_ref, doi)
+VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(path) DO UPDATE SET
     hash=excluded.hash,
     chunks=excluded.chunks,
@@ -294,12 +374,31 @@ ON CONFLICT(path) DO UPDATE SET
     size=excluded.size,
     embedded=1,
     document_id=excluded.document_id,
-    title=excluded.title`,
-		doc.Path, doc.Hash, len(chunks), now, doc.Size, doc.ID, doc.Title,
+    title=excluded.title,
+    document_key=excluded.document_key,
+    source_path=excluded.source_path,
+    zotero_ref=excluded.zotero_ref,
+    doi=excluded.doi`,
+		doc.Path, doc.Hash, len(chunks), now, doc.Size, doc.ID, doc.Title, doc.DocumentKey, doc.SourcePath, ref, doc.DOI,
 	); e != nil {
 		return e
 	}
 	return tx.Commit()
+}
+
+// Hydrate bibliographic identity on a pre-feature index without embedding again.
+// The caller must prove the source still matches the indexed content hash.
+func (d *DB) SetDocumentIdentity(ctx context.Context, doc model.Document) error {
+	ref := ""
+	if doc.Zotero != nil {
+		b, err := json.Marshal(doc.Zotero)
+		if err != nil {
+			return err
+		}
+		ref = string(b)
+	}
+	_, err := d.SQL.ExecContext(ctx, "UPDATE files SET document_key=?,source_path=?,zotero_ref=?,doi=? WHERE path=? AND hash=?", doc.DocumentKey, doc.SourcePath, ref, doc.DOI, doc.Path, doc.Hash)
+	return err
 }
 
 func (d *DB) Delete(ctx context.Context, path string) error {
@@ -345,8 +444,8 @@ type Match struct {
 	Score float64
 }
 
-func (d *DB) FTS(ctx context.Context, query string, limit int) ([]Match, error) {
-	rows, e := d.SQL.QueryContext(ctx, "SELECT rowid,bm25(chunks_fts) FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts) LIMIT ?", query, limit)
+func (d *DB) FTS(ctx context.Context, query string, limit int, filtered ...bool) ([]Match, error) {
+	rows, e := d.SQL.QueryContext(ctx, "SELECT rowid,bm25(chunks_fts) FROM chunks_fts WHERE chunks_fts MATCH ?"+filterSQL(filtered)+" ORDER BY bm25(chunks_fts) LIMIT ?", query, limit)
 	if e != nil {
 		return nil, e
 	}
@@ -362,8 +461,8 @@ func (d *DB) FTS(ctx context.Context, query string, limit int) ([]Match, error) 
 	return out, rows.Err()
 }
 
-func (d *DB) FTSHan(ctx context.Context, query string, limit int) ([]Match, error) {
-	rows, err := d.SQL.QueryContext(ctx, "SELECT rowid,bm25(chunks_cjk) FROM chunks_cjk WHERE chunks_cjk MATCH ? ORDER BY bm25(chunks_cjk) LIMIT ?", query, limit)
+func (d *DB) FTSHan(ctx context.Context, query string, limit int, filtered ...bool) ([]Match, error) {
+	rows, err := d.SQL.QueryContext(ctx, "SELECT rowid,bm25(chunks_cjk) FROM chunks_cjk WHERE chunks_cjk MATCH ?"+filterSQL(filtered)+" ORDER BY bm25(chunks_cjk) LIMIT ?", query, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -379,8 +478,8 @@ func (d *DB) FTSHan(ctx context.Context, query string, limit int) ([]Match, erro
 	return out, rows.Err()
 }
 
-func (d *DB) Vectors(ctx context.Context, vector []float32, limit int) ([]Match, error) {
-	rows, e := d.SQL.QueryContext(ctx, "SELECT rowid,distance FROM chunks_vec WHERE embedding MATCH ? LIMIT ?", vecBytes(vector), limit)
+func (d *DB) Vectors(ctx context.Context, vector []float32, limit int, filtered ...bool) ([]Match, error) {
+	rows, e := d.SQL.QueryContext(ctx, "SELECT rowid,distance FROM chunks_vec WHERE embedding MATCH ?"+filterSQL(filtered)+" LIMIT ?", vecBytes(vector), limit)
 	if e != nil {
 		return nil, e
 	}
@@ -394,6 +493,70 @@ func (d *DB) Vectors(ctx context.Context, vector []float32, limit int) ([]Match,
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+func filterSQL(filtered []bool) string {
+	if len(filtered) > 0 && filtered[0] {
+		return " AND rowid IN (SELECT rowid FROM temp.allowed_chunks)"
+	}
+	return ""
+}
+
+// A nil filter is unrestricted; an empty filter explicitly permits no chunks.
+func (d *DB) SetDocumentFilter(ctx context.Context, keys []string) error {
+	if _, err := d.SQL.ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS allowed_documents (document_key TEXT PRIMARY KEY);
+CREATE TEMP TABLE IF NOT EXISTS allowed_chunks (rowid INTEGER PRIMARY KEY);
+DELETE FROM temp.allowed_documents; DELETE FROM temp.allowed_chunks;`); err != nil {
+		return err
+	}
+	tx, err := d.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, "INSERT OR IGNORE INTO temp.allowed_documents VALUES (?)")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, key := range keys {
+		if _, err = stmt.ExecContext(ctx, key); err != nil {
+			return err
+		}
+	}
+	cols, err := d.documentColumnsInTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	identity := "'path:'||f.path"
+	if cols {
+		identity = "CASE WHEN f.document_key='' THEN 'path:'||f.path ELSE f.document_key END"
+	}
+	_, err = tx.ExecContext(ctx, "INSERT INTO temp.allowed_chunks SELECT c.rowid FROM chunks c JOIN files f ON f.path=c.file_path JOIN temp.allowed_documents a ON a.document_key="+identity)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (d *DB) documentColumnsInTx(ctx context.Context, tx *sql.Tx) (bool, error) {
+	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(files)")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var a, b, c, e, f any
+		var name string
+		if err = rows.Scan(&a, &name, &b, &c, &e, &f); err != nil {
+			return false, err
+		}
+		if name == "document_key" {
+			found = true
+		}
+	}
+	return found, rows.Err()
 }
 
 func (d *DB) Chunks(ctx context.Context, ids []int64) (map[int64]model.Chunk, error) {

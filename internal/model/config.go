@@ -76,6 +76,11 @@ func LoadConfig(path string) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if c.Zotero != nil {
+		if err := c.Zotero.Validate(); err != nil {
+			return err
+		}
+	}
 	if c.Documents == "" {
 		return errors.New("documents directory is required")
 	}
