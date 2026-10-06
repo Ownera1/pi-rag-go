@@ -1,16 +1,8 @@
 node_modules/
 .pi/
 .env
-*.js
-*.d.ts
-!types/*.d.ts
-*.map
 .DS_Store
-coverage/
 FORK_WORK.md
-eval/runs/
-docs/
-__tests__/
 
 *.db
 *.db-wal
@@ -22,3 +14,4 @@ __tests__/
 
 /dist/
 __pycache__/
+/.codegraph/
