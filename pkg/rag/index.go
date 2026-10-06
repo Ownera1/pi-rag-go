@@ -158,6 +158,11 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 	if len(paths) == 0 {
 		return result
 	}
+	titles, e := c.zoteroTitles(ctx)
+	if e != nil {
+		addFailure(&result, c.docs, "catalog", e)
+		return result
+	}
 	// Index previous paths once so each document's replacement lookup is a
 	// sorted prefix range or an ancestor walk, not a scan of every path.
 	sort.Strings(previous)
@@ -259,6 +264,10 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 					done <- work{path: p, stage: "embed", err: errors.New("embedding provider unavailable")}
 					continue
 				}
+				title := doc.Title
+				if t := titles[doc.DocumentKey]; t != "" {
+					title = t
+				}
 				texts := make([]string, len(chunks))
 				for i := range chunks {
 					chunks[i].ID = doc.ID + "-" + fmt.Sprint(chunks[i].ChunkIndex)
@@ -269,7 +278,7 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 					chunks[i].Title = doc.Title
 					chunks[i].Format = doc.Format
 					chunks[i].ParserVersion = doc.ParserVersion
-					texts[i] = chunks[i].Content
+					texts[i] = embeddingText(title, chunks[i].Section, chunks[i].Content)
 				}
 				select {
 				case embedSlots <- struct{}{}:
@@ -317,6 +326,23 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 		result.Chunks += len(w.chunks)
 	}
 	return result
+}
+
+// embeddingText prefixes a chunk with its document title and section path so
+// the vector carries context the chunk text alone lacks. Content stays bare.
+// ponytail: a Zotero link made after indexing reaches vectors only on rebuild.
+func embeddingText(title string, section *string, content string) string {
+	head := []string{}
+	if title != "" {
+		head = append(head, title)
+	}
+	if section != nil && *section != "" {
+		head = append(head, *section)
+	}
+	if len(head) == 0 {
+		return content
+	}
+	return strings.Join(head, " > ") + "\n\n" + content
 }
 
 func randomID() string {

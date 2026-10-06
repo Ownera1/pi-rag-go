@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -99,7 +100,9 @@ func TestWorkspaceCredentialsAreIsolatedAndEnvironmentWins(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		want := "Bearer " + body.Input[0]
+		// The token is the chunk content after the title/section prefix.
+		input := body.Input[0]
+		want := "Bearer " + input[strings.LastIndex(input, "\n\n")+2:]
 		if global.Load() {
 			want = "Bearer environment"
 		}

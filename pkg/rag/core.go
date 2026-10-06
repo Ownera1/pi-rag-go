@@ -221,9 +221,9 @@ func fingerprint(cfg Config) (string, string) {
 		BaseURL     string
 	}{cfg.Embedding.Type, cfg.Embedding.Model, cfg.Embedding.Dimensions, cfg.Embedding.BaseURL})
 	proc, _ := json.Marshal(struct {
-		Parser, Search, Chunker string
-		Chunking                model.ChunkingConfig
-	}{document.ParserVersion, "han-ngrams-v1", chunk.Version, cfg.Chunking})
+		Parser, Search, Chunker, Embed string
+		Chunking                       model.ChunkingConfig
+	}{document.ParserVersion, "han-ngrams-v1", chunk.Version, "title-section-v1", cfg.Chunking})
 	eh, ph := sha256.Sum256(emb), sha256.Sum256(proc)
 	return hex.EncodeToString(eh[:]), hex.EncodeToString(ph[:])
 }

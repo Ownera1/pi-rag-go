@@ -614,6 +614,25 @@ FROM document_zotero_links l JOIN zotero_items i USING(library_type,library_id,i
 	return m, rows.Err()
 }
 
+// Titles maps each linked document key to its Zotero item title.
+func (d *DB) Titles(ctx context.Context) (map[string]string, error) {
+	rows, err := d.SQL.QueryContext(ctx, `SELECT l.document_key,i.title FROM document_zotero_links l
+JOIN zotero_items i USING(library_type,library_id,item_key) WHERE i.title<>''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var key, title string
+		if err = rows.Scan(&key, &title); err != nil {
+			return nil, err
+		}
+		out[key] = title
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) Status(ctx context.Context) (model.ZoteroStatus, error) {
 	s := model.ZoteroStatus{Orphans: []string{}}
 	for q, p := range map[string]*int{"SELECT COUNT(*) FROM zotero_items WHERE deleted=0 AND item_type NOT IN ('attachment','note','annotation')": &s.Items, "SELECT COUNT(*) FROM zotero_items WHERE deleted=0 AND item_type='attachment'": &s.Attachments, "SELECT COUNT(*) FROM document_zotero_links": &s.Links, "SELECT COUNT(*) FROM document_zotero_links WHERE locked=1": &s.Locked} {
