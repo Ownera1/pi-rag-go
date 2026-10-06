@@ -125,13 +125,6 @@ CREATE TABLE IF NOT EXISTS files (
     title TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_file_path ON chunks(file_path);
-CREATE TABLE IF NOT EXISTS chunk_sources (
-    chunk_id TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
-    source_path TEXT NOT NULL,
-    title TEXT NOT NULL,
-    format TEXT NOT NULL,
-    parser_version TEXT NOT NULL
-);
 `, dim)
 	_, err := d.SQL.Exec(schema)
 	if err == nil {
@@ -164,7 +157,7 @@ func (d *DB) ensureDocumentColumns() error {
 	if err != nil {
 		return err
 	}
-	for _, name := range []string{"document_key", "source_path", "zotero_ref", "doi"} {
+	for _, name := range []string{"document_key", "source_path", "zotero_ref", "doi", "format", "parser_version"} {
 		if !cols[name] {
 			if _, err = d.SQL.Exec("ALTER TABLE files ADD COLUMN " + name + " TEXT NOT NULL DEFAULT ''"); err != nil {
 				return err
@@ -277,6 +270,24 @@ func (d *DB) FileHash(ctx context.Context, path string) (string, bool, error) {
 	return hash, embedded != 0, e
 }
 
+// Embedded returns the content hash of every fully embedded file.
+func (d *DB) Embedded(ctx context.Context) (map[string]string, error) {
+	rows, e := d.SQL.QueryContext(ctx, "SELECT path,hash FROM files WHERE embedded<>0")
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var path, hash string
+		if e = rows.Scan(&path, &hash); e != nil {
+			return nil, e
+		}
+		out[path] = hash
+	}
+	return out, rows.Err()
+}
+
 func vecBytes(v []float32) []byte {
 	b := make([]byte, 4*len(v))
 	for i, x := range v {
@@ -336,12 +347,27 @@ func (d *DB) Replace(ctx context.Context, doc model.Document, chunks []model.Chu
 		}
 		ref = string(b)
 	}
-	for i, c := range chunks {
-		r, err := tx.ExecContext(ctx, `
+	insertChunk, e := tx.PrepareContext(ctx, `
 INSERT INTO chunks (
     id, file_path, chunk_content, line_start, line_end, chunk_hash,
     indexed_at, tokens, page_start, page_end, section, chunk_index
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if e != nil {
+		return e
+	}
+	defer insertChunk.Close()
+	insertHan, e := tx.PrepareContext(ctx, "INSERT INTO chunks_cjk(rowid,search_text) VALUES(?,?)")
+	if e != nil {
+		return e
+	}
+	defer insertHan.Close()
+	insertVector, e := tx.PrepareContext(ctx, "INSERT INTO chunks_vec(rowid,embedding) VALUES(CAST(? AS INTEGER),?)")
+	if e != nil {
+		return e
+	}
+	defer insertVector.Close()
+	for i, c := range chunks {
+		r, err := insertChunk.ExecContext(ctx,
 			c.ID, doc.Path, c.Content, c.LineStart, c.LineEnd, c.Hash,
 			now, c.Tokens, c.PageStart, c.PageEnd, c.Section, c.ChunkIndex,
 		)
@@ -352,21 +378,18 @@ INSERT INTO chunks (
 		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO chunks_cjk(rowid,search_text) VALUES(?,?)", rowid, searchtext.Indexed(c.Content+" "+doc.Path)); err != nil {
+		if _, err = insertHan.ExecContext(ctx, rowid, searchtext.Indexed(c.Content+" "+doc.Path)); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO chunks_vec(rowid,embedding) VALUES(CAST(? AS INTEGER),?)", rowid, vecBytes(vectors[i])); err != nil {
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO chunk_sources
-            (chunk_id, source_path, title, format, parser_version) VALUES (?, ?, ?, ?, ?)`,
-			c.ID, doc.SourcePath, doc.Title, doc.Format, doc.ParserVersion); err != nil {
+		if _, err = insertVector.ExecContext(ctx, rowid, vecBytes(vectors[i])); err != nil {
 			return err
 		}
 	}
+	// Source attribution is per document, so it lives on the file row and is
+	// joined into chunks at query time.
 	if _, e = tx.ExecContext(ctx, `
-INSERT INTO files (path, hash, chunks, indexed, size, embedded, document_id, title, document_key, source_path, zotero_ref, doi)
-VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+INSERT INTO files (path, hash, chunks, indexed, size, embedded, document_id, title, document_key, source_path, zotero_ref, doi, format, parser_version)
+VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(path) DO UPDATE SET
     hash=excluded.hash,
     chunks=excluded.chunks,
@@ -378,8 +401,10 @@ ON CONFLICT(path) DO UPDATE SET
     document_key=excluded.document_key,
     source_path=excluded.source_path,
     zotero_ref=excluded.zotero_ref,
-    doi=excluded.doi`,
-		doc.Path, doc.Hash, len(chunks), now, doc.Size, doc.ID, doc.Title, doc.DocumentKey, doc.SourcePath, ref, doc.DOI,
+    doi=excluded.doi,
+    format=excluded.format,
+    parser_version=excluded.parser_version`,
+		doc.Path, doc.Hash, len(chunks), now, doc.Size, doc.ID, doc.Title, doc.DocumentKey, doc.SourcePath, ref, doc.DOI, doc.Format, doc.ParserVersion,
 	); e != nil {
 		return e
 	}
@@ -570,11 +595,21 @@ func (d *DB) Chunks(ctx context.Context, ids []int64) (map[int64]model.Chunk, er
 		args[i] = id
 		placeholders[i] = "?"
 	}
+	cols, err := d.documentColumns()
+	if err != nil {
+		return nil, err
+	}
+	// Readers tolerate a store written before these columns existed.
+	field := func(name string) string {
+		if cols[name] {
+			return "COALESCE(f." + name + ",'')"
+		}
+		return "''"
+	}
 	columns := `chunks.rowid, chunks.id, file_path, chunk_content, line_start, line_end,
         chunk_hash, indexed_at, tokens, page_start, page_end, section, chunk_index`
-	columns += `, COALESCE(source_path,''), COALESCE(title,''),
-            COALESCE(format,''), COALESCE(parser_version,'')`
-	join := " LEFT JOIN chunk_sources ON chunk_sources.chunk_id=chunks.id"
+	columns += ", " + field("source_path") + ", COALESCE(f.title,''), " + field("format") + ", " + field("parser_version")
+	join := " LEFT JOIN files f ON f.path=chunks.file_path"
 	q := "SELECT " + columns + " FROM chunks" + join + " WHERE chunks.rowid IN (" + strings.Join(placeholders, ",") + ")"
 	rows, e := d.SQL.QueryContext(ctx, q, args...)
 	if e != nil {

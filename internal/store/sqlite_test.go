@@ -32,9 +32,12 @@ func TestSourceMetadataReplacementAndReadOnly(t *testing.T) {
 	if err := db.Replace(ctx, doc, chunks, [][]float32{{1, 0}}); err != nil {
 		t.Fatal(err)
 	}
-	var count int
-	if err := db.SQL.QueryRow("SELECT count(*) FROM chunk_sources").Scan(&count); err != nil || count != 1 {
-		t.Fatalf("stale metadata retained: %d err=%v", count, err)
+	if err := db.SQL.QueryRow("SELECT rowid FROM chunks").Scan(&row); err != nil {
+		t.Fatal(err)
+	}
+	got, err = db.Chunks(ctx, []int64{row})
+	if c := got[row]; err != nil || c.Title != "Updated Paper" || c.Format != "mineru" || c.ParserVersion != "v3" {
+		t.Fatalf("stale metadata retained: %+v err=%v", got, err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
@@ -75,5 +78,37 @@ func TestReplacementRollsBackAllArtifactsOnFailure(t *testing.T) {
 	paths, err := db.List(ctx)
 	if err != nil || len(paths) != 1 || paths[0] != "old.md" {
 		t.Fatalf("rollback: %v %v", paths, err)
+	}
+}
+
+func TestReaderToleratesStoreWithoutFileFormatColumns(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "rag.db")
+	db, err := Open(path, false, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := model.Document{ID: "old", Path: "old.md", Hash: "h", Title: "Old", Format: "markdown", ParserVersion: "v2"}
+	if err = db.Replace(ctx, doc, []model.Chunk{{ID: "old-0", Content: "legacy evidence"}}, [][]float32{{1, 0}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range []string{"format", "parser_version"} {
+		if _, err = db.SQL.Exec("ALTER TABLE files DROP COLUMN " + column); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	reader, err := Open(path, true, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	var row int64
+	if err = reader.SQL.QueryRow("SELECT rowid FROM chunks").Scan(&row); err != nil {
+		t.Fatal(err)
+	}
+	got, err := reader.Chunks(ctx, []int64{row})
+	if c := got[row]; err != nil || c.Content != "legacy evidence" || c.Title != "Old" || c.Format != "" {
+		t.Fatalf("%+v %v", got, err)
 	}
 }
