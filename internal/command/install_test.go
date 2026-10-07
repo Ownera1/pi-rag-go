@@ -254,3 +254,57 @@ func TestUninstallRemovesRegistrationsAndPurges(t *testing.T) {
 		t.Fatalf("second uninstall: %s %v", out.String(), err)
 	}
 }
+
+func TestJSONAgentsRegisterKeepOtherSettingsAndUninstall(t *testing.T) {
+	h := testHost(t, &fakeClaude{})
+	pi := jsonAgentPath("pi", h)
+	if err := os.MkdirAll(filepath.Dir(pi), 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{"theme":"<dark>","mcpServers":{"other":{"command":"x"},"rag-go":{"command":"/old/rag","args":["mcp"]}}}`
+	if err := os.WriteFile(pi, []byte(original), 0640); err != nil {
+		t.Fatal(err)
+	}
+	agents, err := selectAgents("auto", h)
+	if err != nil || !reflect.DeepEqual(agents, []string{"claude", "codex", "pi"}) {
+		t.Fatalf("auto: %v %v", agents, err)
+	}
+	for _, want := range []string{"updated", "already registered"} {
+		if status, err := register(context.Background(), "pi", h, true); err != nil || status != want {
+			t.Fatalf("register: %q %v", status, err)
+		}
+	}
+	var cfg struct {
+		Theme      string                    `json:"theme"`
+		MCPServers map[string]map[string]any `json:"mcpServers"`
+	}
+	b, _ := os.ReadFile(pi)
+	if err := json.Unmarshal(b, &cfg); err != nil || cfg.Theme != "<dark>" || cfg.MCPServers["other"]["command"] != "x" || cfg.MCPServers["rag-go"]["command"] != h.exe {
+		t.Fatalf("config: %s %v", b, err)
+	}
+	if st, _ := os.Stat(pi); st.Mode().Perm() != 0640 {
+		t.Fatalf("mode changed: %v", st.Mode())
+	}
+	desktop := jsonAgentPath("claude-desktop", h)
+	if status, err := register(context.Background(), "claude-desktop", h, true); err != nil || status != "registered" {
+		t.Fatalf("new file: %q %v", status, err)
+	}
+	for _, path := range []string{pi, desktop} {
+		agent := map[string]string{pi: "pi", desktop: "claude-desktop"}[path]
+		if status, err := register(context.Background(), agent, h, false); err != nil || status != "removed" {
+			t.Fatalf("unregister %s: %q %v", agent, status, err)
+		}
+		if b, _ := os.ReadFile(path); strings.Contains(string(b), "rag-go") {
+			t.Fatalf("entry kept: %s", b)
+		}
+	}
+	if b, _ := os.ReadFile(pi); !strings.Contains(string(b), `"other"`) {
+		t.Fatalf("other server lost: %s", b)
+	}
+	if err := os.WriteFile(pi, []byte("[]"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := register(context.Background(), "pi", h, true); err == nil {
+		t.Fatal("accepted non-object config")
+	}
+}

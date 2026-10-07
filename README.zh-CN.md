@@ -14,14 +14,14 @@ PDF 提取、OCR 和版面恢复由 MinerU Desktop 等外部工具完成。rag-g
 
 ```sh
 brew install --formula ownera1/tap/rag-go
-rag install    # 一次：embedding 服务、隐藏输入的 API key、接入 Claude Code 与 Codex
+rag install    # 一次：embedding 服务、隐藏输入的 API key、接入已安装的 Agent
 cd my-project
 rag init       # 不提问；./documents 中已有文件时直接建立索引
 ```
 
-执行 `rag install` 后重启 Claude Code 或 Codex，Agent 即可检索它所在的项目；在终端中 `rag query '信道估计'` 同样可用。查询会自动同步变更的文档，无需单独的索引步骤。
+执行 `rag install` 后重启 Agent，Agent 即可检索它所在的项目；在终端中 `rag query '信道估计'` 同样可用。查询会自动同步变更的文档，无需单独的索引步骤。
 
-`rag install` 将全局默认配置保存到 `~/.config/rag-go/config.json`，API key 保存到同目录的 `credentials.json`（权限 `0600`；可用 `XDG_CONFIG_HOME` 或 `RAG_GO_CONFIG_DIR` 修改位置）。它先验证 embedding 服务，再注册一个不绑定工作区的 MCP 服务器 `rag mcp`：Claude Code 使用 user scope，Codex 写入 `~/.codex/config.toml`，只改动 `[mcp_servers.rag-go]` 表，其他设置和注释保持不变。`--agents claude,codex` 或 `--agents none` 可覆盖自动检测。重复执行是安全的；`rag uninstall [--purge]` 可撤销。Voyage 默认模型为 `voyage-4-lite`，维度为 1024。使用 OpenAI-compatible 服务时，需要填写对应的模型、地址和维度：
+`rag install` 将全局默认配置保存到 `~/.config/rag-go/config.json`，API key 保存到同目录的 `credentials.json`（权限 `0600`；可用 `XDG_CONFIG_HOME` 或 `RAG_GO_CONFIG_DIR` 修改位置）。它先验证 embedding 服务，再注册一个不绑定工作区的 MCP 服务器 `rag mcp`：Claude Code 使用 user scope，Codex 写入 `~/.codex/config.toml`，只改动 `[mcp_servers.rag-go]` 表，其他设置和注释保持不变；Claude Desktop、Antigravity（IDE 与 `agy` CLI 共用 `~/.gemini/config/mcp_config.json`）和 pi（`~/.pi/agent/mcp.json`）只改动各自 JSON 中的 `mcpServers.rag-go`。自动检测按 CLI 或配置目录是否存在；`--agents claude,codex,claude-desktop,antigravity,pi` 或 `--agents none` 可覆盖。Claude Desktop 的普通对话没有项目目录，提问时需给出工作区路径。重复执行是安全的；`rag uninstall [--purge]` 可撤销。Voyage 默认模型为 `voyage-4-lite`，维度为 1024。使用 OpenAI-compatible 服务时，需要填写对应的模型、地址和维度：
 
 ```sh
 rag install --embedding-type openai --model YOUR_MODEL --dimensions YOUR_DIMENSIONS \

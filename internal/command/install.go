@@ -1,6 +1,7 @@
 package command
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/Ownera1/rag-go/internal/workspace"
@@ -76,12 +78,12 @@ func install(ctx context.Context, args []string, in io.Reader, out, stderr io.Wr
 	fs.SetOutput(stderr)
 	providerOptions := addProviderFlags(fs)
 	offline := fs.Bool("offline", false, "skip the embedding probe")
-	agentList := fs.String("agents", "auto", "comma-separated claude,codex; auto detects installed agents; none skips")
+	agentList := fs.String("agents", "auto", "comma-separated "+agentNames+"; auto detects installed agents; none skips")
 	if err := fs.Parse(ReorderFlags(args, map[string]bool{"offline": true, "h": true, "help": true})); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: rag install [--agents auto|none|claude,codex] [provider options]")
+		return errors.New("usage: rag install [--agents auto|none|" + agentNames + "] [provider options]")
 	}
 	agents, err := selectAgents(*agentList, h)
 	if err != nil {
@@ -159,13 +161,7 @@ func install(ctx context.Context, args []string, in io.Reader, out, stderr io.Wr
 	}
 	results, problem := map[string]string{}, error(nil)
 	for _, agent := range agents {
-		var status string
-		var e error
-		if agent == "claude" {
-			status, e = registerClaude(ctx, h)
-		} else {
-			status, e = registerCodex(h)
-		}
+		status, e := register(ctx, agent, h, true)
 		if e != nil {
 			status = "failed: " + e.Error()
 			problem = errors.Join(problem, fmt.Errorf("%s: %w", agent, e))
@@ -178,7 +174,7 @@ func install(ctx context.Context, args []string, in io.Reader, out, stderr io.Wr
 		return err
 	}
 	if len(agents) > 0 {
-		fmt.Fprintln(stderr, "Restart Claude Code or Codex to load rag-go. Then, in each project: rag init")
+		fmt.Fprintln(stderr, "Restart the agents to load rag-go. Then, in each project: rag init")
 	} else {
 		fmt.Fprintln(stderr, "In each project: rag init")
 	}
@@ -188,13 +184,13 @@ func install(ctx context.Context, args []string, in io.Reader, out, stderr io.Wr
 func uninstall(ctx context.Context, args []string, out, stderr io.Writer, h host) error {
 	fs := flag.NewFlagSet("rag uninstall", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	agentList := fs.String("agents", "auto", "comma-separated claude,codex; auto detects installed agents")
+	agentList := fs.String("agents", "auto", "comma-separated "+agentNames+"; auto detects installed agents")
 	purge := fs.Bool("purge", false, "also delete the user-wide configuration and credentials")
 	if err := fs.Parse(ReorderFlags(args, map[string]bool{"purge": true, "h": true, "help": true})); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: rag uninstall [--agents auto|claude,codex] [--purge]")
+		return errors.New("usage: rag uninstall [--agents auto|" + agentNames + "] [--purge]")
 	}
 	agents, err := selectAgents(*agentList, h)
 	if err != nil {
@@ -202,13 +198,7 @@ func uninstall(ctx context.Context, args []string, out, stderr io.Writer, h host
 	}
 	results, problem := map[string]string{}, error(nil)
 	for _, agent := range agents {
-		var status string
-		var e error
-		if agent == "claude" {
-			status, e = unregisterClaude(ctx, h)
-		} else {
-			status, e = unregisterCodex(h)
-		}
+		status, e := register(ctx, agent, h, false)
 		if e != nil {
 			status = "failed: " + e.Error()
 			problem = errors.Join(problem, fmt.Errorf("%s: %w", agent, e))
@@ -252,17 +242,113 @@ func selectAgents(list string, h host) ([]string, error) {
 		if _, e := os.Stat(codexHome(h)); err == nil || e == nil {
 			agents = append(agents, "codex")
 		}
+		for _, agent := range []string{"claude-desktop", "antigravity", "pi"} {
+			if _, e := os.Stat(filepath.Dir(jsonAgentPath(agent, h))); e == nil {
+				agents = append(agents, agent)
+			}
+		}
 		return agents, nil
 	}
 	agents := []string{}
 	for _, agent := range strings.Split(list, ",") {
 		agent = strings.TrimSpace(agent)
-		if agent != "claude" && agent != "codex" {
-			return nil, fmt.Errorf("unknown agent %q; use claude, codex, auto or none", agent)
+		if !strings.Contains(","+agentNames+",", ","+agent+",") {
+			return nil, fmt.Errorf("unknown agent %q; use %s, auto or none", agent, agentNames)
 		}
 		agents = append(agents, agent)
 	}
 	return agents, nil
+}
+
+const agentNames = "claude,codex,claude-desktop,antigravity,pi"
+
+func register(ctx context.Context, agent string, h host, add bool) (string, error) {
+	switch agent {
+	case "claude":
+		if add {
+			return registerClaude(ctx, h)
+		}
+		return unregisterClaude(ctx, h)
+	case "codex":
+		if add {
+			return registerCodex(h)
+		}
+		return unregisterCodex(h)
+	}
+	return editJSONAgent(jsonAgentPath(agent, h), h, add)
+}
+
+// jsonAgentPath is the "mcpServers" JSON file of an agent configured by file:
+// Claude Desktop, Antigravity (shared by the IDE and agy) and pi.
+func jsonAgentPath(agent string, h host) string {
+	switch agent {
+	case "claude-desktop":
+		if runtime.GOOS == "darwin" {
+			return filepath.Join(h.home, "Library", "Application Support", "Claude", "claude_desktop_config.json")
+		}
+		return filepath.Join(h.home, ".config", "Claude", "claude_desktop_config.json")
+	case "antigravity":
+		return filepath.Join(h.home, ".gemini", "config", "mcp_config.json")
+	}
+	return filepath.Join(h.home, ".pi", "agent", "mcp.json")
+}
+
+// editJSONAgent adds or removes mcpServers["rag-go"], keeping every other key.
+func editJSONAgent(path string, h host, add bool) (string, error) {
+	cfg := map[string]json.RawMessage{}
+	mode := os.FileMode(0600)
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if !add {
+			return "not registered", nil
+		}
+	} else if err != nil {
+		return "", err
+	} else {
+		if st, e := os.Stat(path); e == nil {
+			mode = st.Mode().Perm()
+		}
+		if len(bytes.TrimSpace(b)) > 0 && json.Unmarshal(b, &cfg) != nil {
+			return "", fmt.Errorf("%s is not a JSON object; fix it or add rag-go manually", path)
+		}
+	}
+	servers := map[string]json.RawMessage{}
+	if raw, ok := cfg["mcpServers"]; ok && json.Unmarshal(raw, &servers) != nil {
+		return "", fmt.Errorf("%s: mcpServers is not an object", path)
+	}
+	want, _ := json.Marshal(map[string]any{"command": h.exe, "args": launch})
+	current, exists := servers["rag-go"]
+	status := "removed"
+	if add {
+		var a, b any
+		if exists && json.Unmarshal(current, &a) == nil && json.Unmarshal(want, &b) == nil && reflect.DeepEqual(a, b) {
+			return "already registered", nil
+		}
+		servers["rag-go"] = want
+		status = "registered"
+		if exists {
+			status = "updated"
+		}
+	} else {
+		if !exists {
+			return "not registered", nil
+		}
+		delete(servers, "rag-go")
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if cfg["mcpServers"], err = json.Marshal(servers); err != nil {
+		return "", err
+	}
+	if err = enc.Encode(cfg); err != nil {
+		return "", err
+	}
+	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return "", err
+	}
+	return status, workspace.AtomicFile(path, buf.Bytes(), mode)
 }
 
 // launch is the workspace-agnostic server command every agent registers.

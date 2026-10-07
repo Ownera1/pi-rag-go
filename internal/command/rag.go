@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/Ownera1/rag-go/internal/version"
 	"github.com/Ownera1/rag-go/pkg/rag"
 )
 
@@ -70,7 +71,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		return Zotero(ctx, rest, out, errout)
 	}
 	if cmd == "version" {
-		fmt.Fprintf(out, "rag-go %s (%s)\n", Version, Commit)
+		fmt.Fprintf(out, "rag-go %s (%s)\n", version.Version, version.Commit)
 		return nil
 	}
 	if cmd == "init" {
