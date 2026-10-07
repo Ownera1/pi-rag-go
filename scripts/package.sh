@@ -15,7 +15,7 @@ export CGO_ENABLED=1
 CGO_CFLAGS=$("$(dirname "$0")/cgo-flags.sh")
 export CGO_CFLAGS
 for binary in rag; do
-  go build -trimpath -tags sqlite_fts5 -ldflags "-s -w -X github.com/Ownera1/rag-go/internal/command.Version=$version -X github.com/Ownera1/rag-go/internal/command.Commit=$commit" -o "$stage/$binary" "./cmd/$binary"
+  go build -trimpath -tags sqlite_fts5 -ldflags "-s -w -X github.com/Ownera1/rag-go/internal/version.Version=$version -X github.com/Ownera1/rag-go/internal/version.Commit=$commit" -o "$stage/$binary" "./cmd/$binary"
 done
 cp LICENSE README.md "$stage/"
 archive="rag-go_${version}_${platform}_${architecture}.tar.gz"

@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Ownera1/rag-go/internal/version"
 	"github.com/Ownera1/rag-go/internal/workspace"
 	"github.com/Ownera1/rag-go/pkg/rag"
 )
@@ -57,7 +58,7 @@ func NewDynamic(readOnly bool, lifecycle ...context.Context) *mcp.Server {
 }
 
 func serve(open resolve, readOnly bool, lifecycle ...context.Context) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "rag-go", Version: "0.2.0"}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "rag-go", Version: version.Version}, nil)
 	if len(lifecycle) > 0 {
 		// Stateful MCP sessions detach tool contexts from the initiating HTTP
 		// request. Tie each call to this MCP process's lifetime explicitly.
