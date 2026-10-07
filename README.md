@@ -66,7 +66,7 @@ Every operation reloads configuration, state and the active database. Reads hold
 
 | Input | Canonical body content | Locations |
 | --- | --- | --- |
-| Markdown / MDX | CommonMark headings, paragraphs and code | Markdown lines |
+| Markdown / MDX | CommonMark headings, paragraphs and code; `$$` display equations in their own chunks; image links reduced to alt text, one-line HTML tables to cell text; References/Bibliography/参考文献 sections skipped | Markdown lines |
 | TEI XML | Abstract, body and appendix; visual/formula/reference subtrees excluded | Physical PDF pages from explicit GROBID coordinates |
 | JATS XML | Abstract and nested body sections | Unknown pages |
 | MinerU JSON | Supported body-text, heading and list exports | Explicit `page_idx` converted from zero-based to one-based |
@@ -91,7 +91,7 @@ An optional source manifest uses the existing format:
 }
 ```
 
-`contentPath` stays within the package, including after symlink resolution. `sourcePath` is attribution only; rag-go does not parse or require the original PDF. Markdown alone does not recover PDF pages. Unknown locations stay unset. Formula, figure, table-relationship and image retrieval remain outside the scholarly body-retrieval scope. The parser input bound is 64 MiB; supported oversized inputs are reported rather than silently pruned.
+`contentPath` stays within the package, including after symlink resolution. `sourcePath` is attribution only; rag-go does not parse or require the original PDF. Markdown alone does not recover PDF pages; to edit MinerU's `full.md` by hand and keep page numbers, add `"pagesFrom": "layout.json"` (or a `*_content_list.json`) to a `"format": "markdown"` manifest in the MinerU folder. Each Markdown paragraph is then located in that export by its text and takes its pages, so hand edits keep them; text the export lacks takes its neighbours' pages, and an export matching under 70% of paragraphs fails the document. MinerU files a paragraph that continues onto the next page entirely under its first page; `layout.json` (MinerU Desktop) or `*_middle.json` marks the moved lines, so with it such a paragraph spans both pages. A MinerU folder indexed from its content list uses a `layout.json` or `*_middle.json` beside it the same way when present. Unknown locations stay unset. Formula, figure, table-relationship and image retrieval remain outside the scholarly body-retrieval scope. The parser input bound is 64 MiB; supported oversized inputs are reported rather than silently pruned.
 
 ## MCP and Agent connections
 

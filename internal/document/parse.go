@@ -39,6 +39,18 @@ func section(path []string) *string {
 	return &s
 }
 
+// inReferences reports a heading path inside a bibliography, which is not
+// indexed.
+func inReferences(path []string) bool {
+	for _, title := range path {
+		lower := strings.ToLower(title)
+		if lower == "references" || lower == "bibliography" || lower == "参考文献" {
+			return true
+		}
+	}
+	return false
+}
+
 type frame struct {
 	heading string
 	skip    bool
