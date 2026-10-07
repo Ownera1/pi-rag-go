@@ -124,3 +124,29 @@ func TestDOIAmbiguityAndTitleCandidatesNeverAutoLink(t *testing.T) {
 		t.Fatal("ambiguous DOI retained automatic match")
 	}
 }
+
+func TestMinerUFolderLinksByAttachmentFilename(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(filepath.Join(t.TempDir(), "catalog.db"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := snapshot()
+	s.Items[1].Filename = "Jiang 等 - 2025 - Channel E.pdf"
+	if _, err = db.Apply(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	doc := model.CatalogDocument{Key: "mineru", Path: "/docs/Jiang 等 - 2025 - Channel E.pdf-4c158022-fc0e-4cd6-832d-4a3e3f423bc6/auto/x_content_list.json"}
+	r, err := db.Match(ctx, []model.CatalogDocument{doc}, "user", "0")
+	if err != nil || r.Linked != 1 {
+		t.Fatalf("match %+v %v", r, err)
+	}
+	if m, _ := db.Metadata(ctx, doc.Key); m == nil || m.AttachmentKey != "ATTACH01" || m.ItemKey != "PAPER001" {
+		t.Fatalf("metadata %+v", m)
+	}
+	doc = model.CatalogDocument{Key: "plain", Path: "/docs/Jiang 等 - 2025 - Channel E.pdf/x_content_list.json"}
+	if r, _ = db.Match(ctx, []model.CatalogDocument{doc}, "user", "0"); r.Linked != 0 {
+		t.Fatal("folder without MinerU suffix linked")
+	}
+}
