@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -110,5 +111,25 @@ func TestReaderToleratesStoreWithoutFileFormatColumns(t *testing.T) {
 	got, err := reader.Chunks(ctx, []int64{row})
 	if c := got[row]; err != nil || c.Content != "legacy evidence" || c.Title != "Old" || c.Format != "" {
 		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestMetadataOfForeignDatabaseIsEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "foreign.db")
+	raw, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = raw.Exec("CREATE TABLE notes(x)"); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+	db, err := Open(path, true, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if v, err := db.GetMetadata(context.Background(), "go_storage_version"); v != "" || err != nil {
+		t.Fatalf("%q %v", v, err)
 	}
 }

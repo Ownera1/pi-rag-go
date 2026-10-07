@@ -117,7 +117,15 @@ func AtomicFile(path string, b []byte, mode os.FileMode) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(f.Name(), path)
+	if err = os.Rename(f.Name(), path); err != nil {
+		return err
+	}
+	// Best effort: persist the rename; some filesystems reject directory fsync.
+	if d, e := os.Open(filepath.Dir(path)); e == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 var EnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

@@ -227,3 +227,36 @@ func TestHeadingPrefersZoteroTitleAndSection(t *testing.T) {
 		t.Fatalf("heading not keyword-searchable: %+v %v", q, err)
 	}
 }
+
+func TestWriteManifestUnderSymlinkedAncestor(t *testing.T) {
+	ctx := context.Background()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	c := openTest(t, link, fakeEmbedding{})
+	defer c.Close()
+	manifest := writePackage(t, c, "paper", "a", "", "")
+	applyFixtureCatalog(t, c, false)
+	if _, err := c.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ref := ZoteroReference{LibraryType: "user", LibraryID: "0", ItemKey: "PAPER002"}
+	if _, err := c.LinkZotero(ctx, manifest, ref, true); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(manifest); err != nil || !strings.Contains(string(b), "PAPER002") {
+		t.Fatalf("%s %v", b, err)
+	}
+	// The manifest itself must still not be a link.
+	other := writePackage(t, c, "other", "b", "", "")
+	if err := os.Rename(other, other+".real"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other+".real", other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.LinkZotero(ctx, other, ref, true); err == nil || !strings.Contains(err.Error(), "symlinked manifest") {
+		t.Fatal(err)
+	}
+}

@@ -5,9 +5,11 @@ import (
 	"errors"
 	"math"
 	"net"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Ownera1/rag-go/internal/chunk"
 	"github.com/Ownera1/rag-go/internal/model"
@@ -31,6 +33,26 @@ func quotedQuery(query string) string {
 const rrfK = 60
 
 // ranks orders candidates by relevance (higher first) and returns 1-based ranks.
+func words(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+}
+
+// pathHas reports whether a word of path below root starts with term, so "to"
+// no longer boosts "history" and the absolute prefix shared by every document
+// boosts nothing.
+func pathHas(root, path, term string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	for _, w := range words(rel) {
+		if strings.HasPrefix(w, term) {
+			return true
+		}
+	}
+	return false
+}
+
 func ranks(relevance map[int64]float64) map[int64]int {
 	ids := make([]int64, 0, len(relevance))
 	for id := range relevance {
@@ -157,9 +179,8 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 		return out, e
 	}
 	hits := []model.Hit{}
-	terms := strings.Fields(strings.ToLower(query))
 	first := ""
-	for _, term := range terms {
+	for _, term := range words(query) {
 		if len([]rune(term)) > 1 {
 			first = term
 			break
@@ -174,7 +195,7 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 			continue
 		}
 		b := -x.Score // FTS5 bm25() is negative; more negative is better.
-		if first != "" && strings.Contains(strings.ToLower(ch.Path), first) {
+		if first != "" && pathHas(c.docs, ch.Path, first) {
 			b *= 1.5
 		}
 		bm[x.RowID] = b

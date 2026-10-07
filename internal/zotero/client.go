@@ -383,13 +383,11 @@ func (c *Client) Fetch(ctx context.Context) (Snapshot, error) {
 				if !errors.As(e, &he) || (he.Status != 404 && he.Status != 400) {
 					return s, e
 				}
-			} else {
-				u, e := url.Parse(strings.TrimSpace(string(b)))
-				if e != nil || u.Scheme != "file" || (u.Host != "" && u.Host != "localhost") {
-					return s, errors.New("invalid Zotero local attachment URL")
-				}
+			} else if u, e := url.Parse(strings.TrimSpace(string(b))); e == nil && u.Scheme == "file" && (u.Host == "" || u.Host == "localhost") {
 				item.Path = filepath.Clean(u.Path)
 			}
+			// Any other URL names no local file, like a 404, so one odd
+			// attachment cannot fail the whole library sync.
 		}
 		s.Items = append(s.Items, item)
 	}

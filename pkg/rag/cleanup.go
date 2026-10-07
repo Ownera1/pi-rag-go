@@ -30,6 +30,26 @@ func (c *session) cleanup(ctx context.Context, keep int, dryRun bool) (result Cl
 	if err = ctx.Err(); err != nil {
 		return result, err
 	}
+	// A rebuild killed mid-way leaves its staging database behind; the exclusive
+	// lock held here means no rebuild is in progress.
+	staging := filepath.Join(c.root, "staging")
+	staged, err := os.ReadDir(staging)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return result, err
+	}
+	for _, entry := range staged {
+		path := filepath.Join(staging, entry.Name())
+		if !entry.IsDir() || !generationName.MatchString(entry.Name()) || !dbDir(path) {
+			result.Skipped = append(result.Skipped, path)
+			continue
+		}
+		if !dryRun {
+			if err = os.RemoveAll(path); err != nil {
+				return result, err
+			}
+		}
+		result.Removed = append(result.Removed, path)
+	}
 	root := filepath.Join(c.root, "indexes")
 	info, err := os.Lstat(root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -124,6 +144,21 @@ func (c *session) cleanup(ctx context.Context, keep int, dryRun bool) (result Cl
 }
 
 func knownGeneration(path string) bool {
+	if !dbDir(path) {
+		return false
+	}
+	db, err := store.Open(filepath.Join(path, "rag.db"), true, 0)
+	if err != nil {
+		return false
+	}
+	defer db.Close()
+	version, err := db.GetMetadata(context.Background(), "go_storage_version")
+	return err == nil && version == "1"
+}
+
+// dbDir reports whether path is a real directory holding rag.db and nothing
+// but its WAL files.
+func dbDir(path string) bool {
 	info, err := os.Lstat(path)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return false
@@ -145,13 +180,5 @@ func knownGeneration(path string) bool {
 			return false
 		}
 	}
-	if !hasDB {
-		return false
-	}
-	db, err := store.Open(filepath.Join(path, "rag.db"), true, 0)
-	if err != nil {
-		return false
-	}
-	defer db.Close()
-	return db.GetMetadata(context.Background(), "go_storage_version") == "1"
+	return hasDB
 }

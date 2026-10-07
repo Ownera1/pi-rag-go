@@ -71,7 +71,7 @@ my-project/
 
 每次操作重新加载配置和当前索引。读取持共享锁；同步、重建、初始化和清理持独占锁。空闲 MCP 进程不持有数据库连接或锁。项目没有文档 watcher 或后台常驻服务。
 
-`rag rebuild` 只有在完整扫描及向量覆盖检查成功后才发布新索引。`rag clean` 保留当前索引、未知文件及 symlink，`--dry-run` 始终只预览。只读连接可能创建 SQLite WAL 辅助文件，但不会修改持久内容、索引或状态。
+`rag rebuild` 只有在完整扫描及向量覆盖检查成功后才发布新索引。`rag clean` 保留当前索引、未知文件及 symlink，并删除中断的 rebuild 残留的 staging 数据库；`--dry-run` 始终只预览。只读连接可能创建 SQLite WAL 辅助文件，但不会修改持久内容、索引或状态。
 
 ## 文档格式与来源
 
@@ -152,7 +152,7 @@ rag connect claude
 rag connect codex
 ```
 
-通常用 `rag install` 接入 Agent；`rag connect claude|codex` 则只为单个项目注册：Claude 注册通过其 CLI 在工作区目录以 local scope 完成。Codex 注册合并项目 `.codex/config.toml`，保留无关设置和其他服务，TOML 注释及格式可能被规范化。两者都固定二进制和工作区的绝对路径，重复相同注册保持原状；冲突配置需加 `--replace`。Codex 仅为受信任项目加载项目配置。连接后重新加载 Agent；注册成功与 Agent 实际调用工具是不同的验收步骤。
+通常用 `rag install` 接入 Agent；`rag connect claude|codex` 则只为单个项目注册：Claude 注册通过其 CLI 在工作区目录以 local scope 完成。Codex 注册只改动项目 `.codex/config.toml` 中的 `[mcp_servers.rag-go]` 表，其他设置、服务和注释保持不变；符号链接的配置文件会通过链接原地修改。两者都固定二进制和工作区的绝对路径，重复相同注册保持原状；冲突配置需加 `--replace`。Codex 仅为受信任项目加载项目配置。连接后重新加载 Agent；注册成功与 Agent 实际调用工具是不同的验收步骤。
 
 ## 配置与检索
 

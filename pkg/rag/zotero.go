@@ -224,6 +224,12 @@ func (c *Core) LinkZotero(ctx context.Context, path string, ref ZoteroReference,
 		if filepath.Base(path) != "rag-source.json" || !within(s.docs, path) {
 			return nil, errors.New("--write-manifest requires a rag-source.json inside documents")
 		}
+		// Symlinked ancestors such as macOS /var or /tmp are fine; the manifest
+		// itself must not be a link, since the atomic write would replace it.
+		st, e := os.Lstat(path)
+		if e != nil {
+			return nil, e
+		}
 		real, e := filepath.EvalSymlinks(path)
 		if e != nil {
 			return nil, e
@@ -232,7 +238,7 @@ func (c *Core) LinkZotero(ctx context.Context, path string, ref ZoteroReference,
 		if e != nil {
 			return nil, e
 		}
-		if !within(root, real) || real != path {
+		if !within(root, real) || st.Mode()&os.ModeSymlink != 0 {
 			return nil, errors.New("cannot write an external or symlinked manifest")
 		}
 		if _, e = document.Parse(ctx, path); e != nil {

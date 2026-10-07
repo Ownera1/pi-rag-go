@@ -123,7 +123,7 @@ func TestConnectCodexMergesProjectConfigAndProtectsConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(directory, "config.toml")
-	original := []byte("model = 'existing-model'\n[mcp_servers.other]\nurl = 'https://example.invalid/mcp'\n")
+	original := []byte("# keep this comment\nmodel = 'existing-model'\n[mcp_servers.other]\nurl = 'https://example.invalid/mcp'\n")
 	if err := os.WriteFile(path, original, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +138,9 @@ func TestConnectCodexMergesProjectConfigAndProtectsConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(path)
+	if !bytes.HasPrefix(b, original) {
+		t.Fatalf("project config rewritten:\n%s", b)
+	}
 	var cfg map[string]any
 	if err := toml.Unmarshal(b, &cfg); err != nil {
 		t.Fatal(err)
@@ -176,6 +179,26 @@ func TestConnectCodexMergesProjectConfigAndProtectsConflicts(t *testing.T) {
 	same, _ = os.ReadFile(path)
 	if !bytes.Equal(bad, same) {
 		t.Fatal("bad TOML changed")
+	}
+	// A symlinked config is edited through the link, not replaced.
+	shared := filepath.Join(t.TempDir(), "shared.toml")
+	if err := os.WriteFile(shared, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shared, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := connect(context.Background(), args, &out, &stderr, unused, exe); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Lstat(path); err != nil || st.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("symlink replaced")
+	}
+	if b, _ := os.ReadFile(shared); !bytes.Contains(b, []byte("rag-go")) {
+		t.Fatalf("shared config not updated: %s", b)
 	}
 }
 func TestConnectClaudeUsesWorkspaceLocalScope(t *testing.T) {

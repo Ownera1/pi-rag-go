@@ -60,7 +60,7 @@ Queries automatically check for changes and perform at most one sync pass. `rag 
 
 Every operation reloads configuration, state and the active database. Reads hold shared process locks; sync, rebuild, initialization and cleanup hold exclusive locks. Idle MCP processes retain no database handle or lock. Readers can run together; writes wait for active readers, with cancellable lock acquisition.
 
-`rag rebuild` stages a new database and publishes it atomically only after a successful stable scan and complete vector coverage. Failed rebuilds keep the active index. `rag clean --keep 3` previews inactive generation cleanup; `--confirm` permits deletion and `--dry-run` forces a preview. Active generations, unknown files and symlinks are retained. SQLite read connections can create WAL sidecar files; read-only means no content/index/state mutation.
+`rag rebuild` stages a new database and publishes it atomically only after a successful stable scan and complete vector coverage. Failed rebuilds keep the active index. `rag clean --keep 3` previews inactive generation cleanup; `--confirm` permits deletion and `--dry-run` forces a preview. Active generations, unknown files and symlinks are retained; staging databases left by an interrupted rebuild are removed. SQLite read connections can create WAL sidecar files; read-only means no content/index/state mutation.
 
 ## Document formats and provenance
 
@@ -108,7 +108,7 @@ Without `--workspace`, stdio `rag mcp` starts in any directory and resolves the 
 
 Read-only stdio and all HTTP servers expose only query/status/list, reject write tools and disable auto-sync. Queries can still call the configured query embedding/reranker. HTTP listens only on loopback, retains Host/Origin checks and prints its URL to stderr. Its default port is ephemeral. A tunnel may launch `rag mcp --read-only --workspace /absolute/project` or connect to the optional HTTP server; tunnel installation and account configuration are external to this repository.
 
-`rag install` is the usual way to connect agents. `rag connect claude|codex` instead registers a single project: `rag connect claude` calls the Claude CLI with local scope from the workspace directory. `rag connect codex` merges the project's `.codex/config.toml` using TOML parsing, retaining unrelated settings and other servers. TOML comments/formatting may be normalized. Both pin the absolute binary and workspace. Repeated identical registrations are retained; conflicting project entries require `--replace`. Codex loads project configuration only for trusted projects. Reload the Agent after connecting. Registration tests do not establish actual Agent tool use.
+`rag install` is the usual way to connect agents. `rag connect claude|codex` instead registers a single project: `rag connect claude` calls the Claude CLI with local scope from the workspace directory. `rag connect codex` edits only the `[mcp_servers.rag-go]` table of the project's `.codex/config.toml`, so other settings, servers and comments survive; a symlinked config is edited through the link. Both pin the absolute binary and workspace. Repeated identical registrations are retained; conflicting project entries require `--replace`. Codex loads project configuration only for trusted projects. Reload the Agent after connecting. Registration tests do not establish actual Agent tool use.
 
 ## Configuration and retrieval
 

@@ -84,7 +84,6 @@ func connect(ctx context.Context, args []string, out, stderr io.Writer, execute 
 				return errors.New("mcp_servers must be a TOML table")
 			}
 		}
-		target := map[string]any{"command": exe, "args": launch}
 		if existing, ok := servers["rag-go"]; ok {
 			current, good := existing.(map[string]any)
 			same := good && current["command"] == exe && reflect.DeepEqual(stringArray(current["args"]), launch) && current["url"] == nil
@@ -96,14 +95,14 @@ func connect(ctx context.Context, args []string, out, stderr io.Writer, execute 
 				return errors.New("project has a different rag-go registration; use --replace")
 			}
 		}
-		servers["rag-go"] = target
-		cfg["mcp_servers"] = servers
-		b, e = toml.Marshal(cfg)
-		if e != nil {
+		if b, e = withCodexServer(b, exe, launch); e != nil {
 			return e
 		}
 		if e = os.MkdirAll(directory, 0700); e != nil {
 			return e
+		}
+		if real, e := filepath.EvalSymlinks(path); e == nil {
+			path = real
 		}
 		if e = workspace.AtomicFile(path, b, 0600); e != nil {
 			return e
