@@ -293,3 +293,22 @@ func TestPackageAtDocumentsRootFailsClosed(t *testing.T) {
 		t.Fatalf("%+v %v", list, err)
 	}
 }
+
+func TestPathBoostMatchesRelativePathWords(t *testing.T) {
+	root := "/Users/history/channel-project/documents"
+	for _, c := range []struct {
+		path, term string
+		want       bool
+	}{
+		{root + "/papers/channel_estimation.md", "channel", true},
+		{root + "/papers/channel_estimation.md", "estim", true},
+		{root + "/notes/history.md", "to", false},
+		{root + "/notes/other.md", "channel", false},
+		{root + "/notes/other.md", "history", false},
+		{root + "/综述/信道估计.md", "信道", true},
+	} {
+		if got := pathHas(root, c.path, c.term); got != c.want {
+			t.Errorf("pathHas(%q, %q) = %v", c.path, c.term, got)
+		}
+	}
+}

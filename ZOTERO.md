@@ -99,7 +99,7 @@ Manifest 可增加可选的 `doi` 和 `zotero` 字段：
 ./bin/rag zotero links --workspace /absolute/knowledge-workspace
 ```
 
-默认只保存 catalog 中的手工关联。`--write-manifest` 只允许修改 documents root 内的普通 `rag-source.json`，不写外部文件或 symlink。写入 Manifest 会改变原有输入指纹，随后正常正文 sync 可能重新 embedding；仅更新远端 metadata 不会如此。catalog 与 Manifest 是两个独立持久对象：若写文件失败，已经保存的 catalog 关联仍然保留。
+默认只保存 catalog 中的手工关联。`--write-manifest` 只允许修改 documents root 内的普通 `rag-source.json`，不写外部文件或 symlink；上级目录是 symlink（如 macOS 的 `/var`、`/tmp`）不受影响。写入 Manifest 会改变原有输入指纹，随后正常正文 sync 可能重新 embedding；仅更新远端 metadata 不会如此。catalog 与 Manifest 是两个独立持久对象：若写文件失败，已经保存的 catalog 关联仍然保留。
 
 catalog 包含人工状态，应随 workspace 备份。只有写入 Manifest 的显式关联才能在丢失 catalog 后通过重新同步和匹配恢复；不要将 catalog 当作可以随意丢弃的纯缓存。
 

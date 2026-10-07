@@ -434,6 +434,25 @@ func withoutCodexServer(text string) (string, bool) {
 	return strings.Join(kept, ""), dropped
 }
 
+// withCodexServer replaces rag-go's tables with one stdio entry, keeping the
+// rest of the file byte for byte.
+func withCodexServer(original []byte, exe string, launch []string) ([]byte, error) {
+	text, _ := withoutCodexServer(string(original))
+	if text = strings.TrimRight(text, "\n"); text != "" {
+		text += "\n\n"
+	}
+	command, _ := json.Marshal(exe)
+	args, _ := json.Marshal(launch)
+	text += "[mcp_servers.rag-go]\ncommand = " + string(command) + "\nargs = " + string(args) + "\n"
+	// Confirm the edit produced exactly the intended entry before writing.
+	servers, err := codexServers([]byte(text))
+	entry, _ := servers["rag-go"].(map[string]any)
+	if err != nil || entry["command"] != exe || !reflect.DeepEqual(stringArray(entry["args"]), launch) || len(entry) != 2 {
+		return nil, errors.New("could not edit Codex configuration safely; add [mcp_servers.rag-go] manually")
+	}
+	return []byte(text), nil
+}
+
 func codexServers(b []byte) (map[string]any, error) {
 	cfg := map[string]any{}
 	if err := toml.Unmarshal(b, &cfg); err != nil {
@@ -445,6 +464,11 @@ func codexServers(b []byte) (map[string]any, error) {
 
 func readCodex(h host) (string, os.FileMode, []byte, error) {
 	path := filepath.Join(codexHome(h), "config.toml")
+	// Edit a symlinked config, such as one from a dotfiles repository, in place
+	// instead of replacing the link.
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real
+	}
 	mode := os.FileMode(0600)
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -472,26 +496,14 @@ func registerCodex(h host) (string, error) {
 	if exists && len(current) == 2 && current["command"] == h.exe && reflect.DeepEqual(stringArray(current["args"]), launch) {
 		return "already registered", nil
 	}
-	text, _ := withoutCodexServer(string(original))
-	if text = strings.TrimRight(text, "\n"); text != "" {
-		text += "\n\n"
-	}
-	command, _ := json.Marshal(h.exe)
-	args, _ := json.Marshal(launch)
-	text += "[mcp_servers.rag-go]\ncommand = " + string(command) + "\nargs = " + string(args) + "\n"
-	// Confirm the edit produced exactly the intended entry before writing.
-	servers, err = codexServers([]byte(text))
+	text, err := withCodexServer(original, h.exe, launch)
 	if err != nil {
-		return "", errors.New("could not edit Codex configuration safely; add [mcp_servers.rag-go] manually")
-	}
-	entry, _ := servers["rag-go"].(map[string]any)
-	if entry["command"] != h.exe || !reflect.DeepEqual(stringArray(entry["args"]), launch) || len(entry) != 2 {
-		return "", errors.New("could not edit Codex configuration safely; add [mcp_servers.rag-go] manually")
+		return "", err
 	}
 	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return "", err
 	}
-	if err = workspace.AtomicFile(path, []byte(text), mode); err != nil {
+	if err = workspace.AtomicFile(path, text, mode); err != nil {
 		return "", err
 	}
 	if exists {

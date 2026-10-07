@@ -129,10 +129,10 @@ func (c *Core) operation(ctx context.Context, write bool) (*session, error) {
 		if e != nil {
 			return fail(e)
 		}
-		version := probe.GetMetadata(ctx, "go_storage_version")
+		version, e := probe.GetMetadata(ctx, "go_storage_version")
 		probe.Close()
-		if ctx.Err() != nil {
-			return fail(ctx.Err())
+		if e != nil {
+			return fail(e)
 		}
 		if version != "1" {
 			return fail(errors.New("existing database is not a recognized Go store; initialize a separate workspace and rebuild"))
@@ -256,12 +256,15 @@ func (s *session) compatible(ctx context.Context, d *store.DB) error {
 		return nil
 	}
 	emb, proc := fingerprint(s.cfg)
-	actualEmb := d.GetMetadata(ctx, "embedding_fingerprint")
-	actualProc := d.GetMetadata(ctx, "processing_fingerprint")
-	actualDocs := d.GetMetadata(ctx, "documents_root")
-	if err := ctx.Err(); err != nil {
-		return err
+	actual := map[string]string{}
+	for _, key := range []string{"embedding_fingerprint", "processing_fingerprint", "documents_root"} {
+		v, err := d.GetMetadata(ctx, key)
+		if err != nil {
+			return err
+		}
+		actual[key] = v
 	}
+	actualEmb, actualProc, actualDocs := actual["embedding_fingerprint"], actual["processing_fingerprint"], actual["documents_root"]
 	if actualEmb != emb {
 		return errors.New("embedding contract changed; rebuild required")
 	}

@@ -175,8 +175,11 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 		if e != nil {
 			return e
 		}
-		version := db.GetMetadata(ctx, "go_storage_version")
+		version, e := db.GetMetadata(ctx, "go_storage_version")
 		db.Close()
+		if e != nil {
+			return e
+		}
 		if version != "1" {
 			return errors.New("existing database is not a recognized Go store; initialize a separate workspace")
 		}

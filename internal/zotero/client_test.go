@@ -222,3 +222,47 @@ func TestEmptyUserAliasKeepsActualLibraryIdentity(t *testing.T) {
 		t.Fatalf("empty library identity %+v %v", snap, err)
 	}
 }
+
+func TestNonFileAttachmentURLIsSkipped(t *testing.T) {
+	attachment := func(key string) map[string]any {
+		v := apiItem(key)
+		data := v["data"].(map[string]any)
+		data["itemType"], data["linkMode"], data["parentItem"] = "attachment", "linked_file", "PARENT01"
+		return v
+	}
+	items := []map[string]any{apiItem("PARENT01"), attachment("REMOTE01"), attachment("LOCAL001")}
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Zotero-API-Version", "3")
+		w.Header().Set("Last-Modified-Version", "0")
+		switch {
+		case r.URL.Path == "/api/":
+		case strings.HasSuffix(r.URL.Path, "REMOTE01/file/view/url"):
+			fmt.Fprint(w, "https://example.invalid/paper.pdf")
+		case strings.HasSuffix(r.URL.Path, "LOCAL001/file/view/url"):
+			fmt.Fprint(w, "file:///papers/local.pdf")
+		case strings.HasSuffix(r.URL.Path, "collections"):
+			w.Header().Set("Total-Results", "0")
+			if r.URL.Query().Get("format") != "keys" {
+				fmt.Fprint(w, "[]")
+			}
+		default:
+			w.Header().Set("Total-Results", strconv.Itoa(len(items)))
+			if r.URL.Query().Get("format") == "keys" {
+				for _, v := range items {
+					fmt.Fprintln(w, v["key"])
+				}
+				return
+			}
+			_ = json.NewEncoder(w).Encode(items)
+		}
+	}))
+	defer s.Close()
+	c, err := New(model.ZoteroConfig{BaseURL: s.URL + "/api/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := c.Fetch(context.Background())
+	if err != nil || len(snap.Items) != 3 || snap.Items[1].Path != "" || snap.Items[2].Path != "/papers/local.pdf" {
+		t.Fatalf("%+v %v", snap.Items, err)
+	}
+}

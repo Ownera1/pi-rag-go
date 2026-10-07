@@ -226,10 +226,15 @@ func ResolvePath(root string) (string, error) {
 	return p, nil
 }
 
-func (d *DB) GetMetadata(ctx context.Context, key string) string {
+// GetMetadata returns "" for a missing key or a database without rag-go's
+// metadata table, and any other error, such as I/O, as is.
+func (d *DB) GetMetadata(ctx context.Context, key string) (string, error) {
 	var v string
-	_ = d.SQL.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key=?", key).Scan(&v)
-	return v
+	e := d.SQL.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key=?", key).Scan(&v)
+	if errors.Is(e, sql.ErrNoRows) || e != nil && strings.Contains(e.Error(), "no such table") {
+		return "", nil
+	}
+	return v, e
 }
 
 func (d *DB) SetMetadata(ctx context.Context, key, value string) error {
@@ -251,9 +256,13 @@ func (d *DB) Stats(ctx context.Context) (model.Status, error) {
 	if err := d.SQL.QueryRowContext(ctx, "SELECT COUNT(*) FROM chunks_vec").Scan(&s.Vectors); err != nil {
 		return s, err
 	}
-	s.EmbeddingModel = d.GetMetadata(ctx, "embedding_model")
-	s.Dimensions, _ = strconv.Atoi(d.GetMetadata(ctx, "embedding_dimensions"))
-	return s, nil
+	var err error
+	if s.EmbeddingModel, err = d.GetMetadata(ctx, "embedding_model"); err != nil {
+		return s, err
+	}
+	dims, err := d.GetMetadata(ctx, "embedding_dimensions")
+	s.Dimensions, _ = strconv.Atoi(dims)
+	return s, err
 }
 
 func (d *DB) FileHash(ctx context.Context, path string) (string, bool, error) {

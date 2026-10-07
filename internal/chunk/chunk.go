@@ -24,13 +24,19 @@ const (
 func Estimate(s string) int {
 	cjk, other := 0, 0
 	for _, r := range s {
-		if (r >= 0x3400 && r <= 0x9fff) || (r >= 0xf900 && r <= 0xfaff) || (r >= 0x3040 && r <= 0x30ff) || (r >= 0xac00 && r <= 0xd7af) {
+		if isCJK(r) {
 			cjk++
 		} else {
 			other++
 		}
 	}
-	return max(1, cjk+(other+3)/4)
+	return estimate(cjk, other)
+}
+
+func estimate(cjk, other int) int { return max(1, cjk+(other+3)/4) }
+
+func isCJK(r rune) bool {
+	return (r >= 0x3400 && r <= 0x9fff) || (r >= 0xf900 && r <= 0xfaff) || (r >= 0x3040 && r <= 0x30ff) || (r >= 0xac00 && r <= 0xd7af)
 }
 
 // Version identifies chunk boundary behavior for the processing fingerprint.
@@ -328,9 +334,11 @@ func splitUnits(r []rune, unitMax int) []unit {
 	all := []unit{}
 	add := func(from, to int) {
 		for from < to {
-			n := to
-			if Estimate(string(r[from:n])) > unitMax {
-				lo, hi, best := from+1, to, from+1
+			// Any span over 4*unitMax runes exceeds unitMax, which bounds the
+			// search on long unpunctuated lines such as minified code.
+			n := min(to, from+4*unitMax+4)
+			if n < to || Estimate(string(r[from:n])) > unitMax {
+				lo, hi, best := from+1, n, from+1
 				for lo <= hi {
 					m := (lo + hi) / 2
 					if Estimate(string(r[from:m])) <= unitMax {
@@ -401,7 +409,9 @@ func cosine(a, b []float32) float64 {
 	return dot / math.Sqrt(aa*bb)
 }
 
-func semanticChunk(b model.Block, r []rune, from, to, index int) model.Chunk {
+// semanticChunk takes lines, the newline count of r[:from], so it scans only
+// the chunk itself.
+func semanticChunk(b model.Block, r []rune, from, to, index, lines int) model.Chunk {
 	raw := string(r[from:to])
 	left := len([]rune(raw)) - len([]rune(strings.TrimLeftFunc(raw, unicode.IsSpace)))
 	trimmed := strings.TrimSpace(raw)
@@ -409,8 +419,8 @@ func semanticChunk(b model.Block, r []rune, from, to, index int) model.Chunk {
 	end := start + utf8.RuneCountInString(trimmed)
 	ls, le := 0, 0
 	if b.LineStart != nil {
-		ls = *b.LineStart + strings.Count(string(r[:start]), "\n")
-		le = *b.LineStart + strings.Count(string(r[:max(start, end-1)]), "\n")
+		ls = *b.LineStart + lines + strings.Count(string(r[from:start]), "\n")
+		le = ls + strings.Count(string(r[start:max(start, end-1)]), "\n")
 	}
 	return newChunk(trimmed, b, index, ls, le)
 }
@@ -470,27 +480,52 @@ func Semantic(ctx context.Context, blocks []model.Block, provider model.Embeddin
 	for _, sp := range splits {
 		b, r, units := sp.block, sp.r, sp.units
 		vectors := all[sp.first : sp.first+len(units)]
+		// Counts at unit boundaries give every span estimate in O(1); rescanning
+		// the remaining text per cursor was quadratic in the block length.
+		type count struct{ cjk, other, lines int }
+		starts, ends := make([]count, len(units)), make([]count, len(units))
+		var c count
+		pos := 0
+		advance := func(to int) count {
+			for ; pos < to; pos++ {
+				if isCJK(r[pos]) {
+					c.cjk++
+				} else {
+					c.other++
+				}
+				if r[pos] == '\n' {
+					c.lines++
+				}
+			}
+			return c
+		}
+		for i, u := range units {
+			starts[i], ends[i] = advance(u.start), advance(u.end)
+		}
+		span := func(i, j int) int { // Estimate(r[units[i].start:units[j].end])
+			return estimate(ends[j].cjk-starts[i].cjk, ends[j].other-starts[i].other)
+		}
+		last := len(units) - 1
 		for cursor := 0; cursor < len(units); {
 			if e := ctx.Err(); e != nil {
 				return nil, e
 			}
-			remaining := string(r[units[cursor].start:units[len(units)-1].end])
-			if Estimate(remaining) <= cfg.Chunking.SemanticTarget {
-				chunks = append(chunks, semanticChunk(b, r, units[cursor].start, units[len(units)-1].end, len(chunks)))
+			if span(cursor, last) <= cfg.Chunking.SemanticTarget {
+				chunks = append(chunks, semanticChunk(b, r, units[cursor].start, units[last].end, len(chunks), starts[cursor].lines))
 				break
 			}
 			bestEnd, furthest := -1, cursor
 			bestScore, bestDistance := math.Inf(1), math.MaxInt
 			for end := cursor; end < len(units); end++ {
-				tokens := Estimate(string(r[units[cursor].start:units[end].end]))
+				tokens := span(cursor, end)
 				if tokens > cfg.Chunking.SemanticMax {
 					break
 				}
 				furthest = end
-				if tokens < cfg.Chunking.SemanticMin || end == len(units)-1 {
+				if tokens < cfg.Chunking.SemanticMin || end == last {
 					continue
 				}
-				if Estimate(remaining) <= cfg.Chunking.SemanticMax && Estimate(string(r[units[end+1].start:units[len(units)-1].end])) < cfg.Chunking.SemanticMin {
+				if span(cursor, last) <= cfg.Chunking.SemanticMax && span(end+1, last) < cfg.Chunking.SemanticMin {
 					continue
 				}
 				score := cosine(vectors[end], vectors[end+1])
@@ -506,7 +541,7 @@ func Semantic(ctx context.Context, blocks []model.Block, provider model.Embeddin
 			if bestEnd >= cursor {
 				end = bestEnd
 			}
-			chunks = append(chunks, semanticChunk(b, r, units[cursor].start, units[end].end, len(chunks)))
+			chunks = append(chunks, semanticChunk(b, r, units[cursor].start, units[end].end, len(chunks), starts[cursor].lines))
 			cursor = end + 1
 		}
 	}

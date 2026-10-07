@@ -6,6 +6,13 @@
 - A symlinked documents directory is followed instead of scanning as empty, which removed every indexed document.
 - A MinerU or `rag-source.json` package file directly in the documents root fails the scan instead of silently reducing the whole tree to one document.
 - `.env` files are no longer indexed or sent to the embedding provider.
+- Semantic chunking is linear in block length: an 800k-character block chunks in tens of milliseconds instead of seconds, with identical chunks.
+- `rag zotero link --write-manifest` works under symlinked ancestors such as macOS `/var` and `/tmp`; only a symlinked manifest itself is refused.
+- `rag connect codex` edits only the `[mcp_servers.rag-go]` table, keeping comments and formatting, and writes through a symlinked config. `rag install` also writes through a symlinked `~/.codex/config.toml`.
+- The filename boost matches words of the path below the documents root that start with the first query term, so `to` no longer boosts `history` and the absolute path no longer boosts every hit.
+- `rag clean` removes staging databases left by an interrupted rebuild. Atomic writes also sync the parent directory.
+- Database read errors are reported as such instead of as "not a recognized Go store" or "rebuild required".
+- A Zotero attachment whose file URL is not a local `file:` URL is skipped like a missing file instead of failing the whole sync.
 
 ## v0.3.3 (2026-10-07)
 

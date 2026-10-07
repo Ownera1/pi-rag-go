@@ -54,12 +54,20 @@ func TestCleanupPreviewRetainsActiveAndUnknownFiles(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(unknown, "personal.txt"), []byte("preserve"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// A rebuild killed mid-way leaves its staging database behind.
+	orphan := filepath.Join(dir, ".rag-go", "staging", "1-0123456789abcdef")
+	if err = os.MkdirAll(orphan, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(orphan, "rag.db"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 	out := t.TempDir()
 	if err = os.Symlink(out, filepath.Join(dir, ".rag-go", "indexes", "linked")); err != nil {
 		t.Fatal(err)
 	}
 	preview, err := c.Cleanup(ctx, 1, true)
-	if err != nil || len(preview.Removed) != 2 {
+	if err != nil || len(preview.Removed) != 3 {
 		t.Fatalf("preview: %+v %v", preview, err)
 	}
 	for _, path := range preview.Removed {
@@ -68,7 +76,7 @@ func TestCleanupPreviewRetainsActiveAndUnknownFiles(t *testing.T) {
 		}
 	}
 	removed, err := c.Cleanup(ctx, 1, false)
-	if err != nil || len(removed.Removed) != 2 {
+	if err != nil || len(removed.Removed) != 3 {
 		t.Fatalf("cleanup: %+v %v", removed, err)
 	}
 	for _, path := range removed.Removed {
