@@ -20,10 +20,11 @@ spec.loader.exec_module(formula)
 class ReleaseTests(unittest.TestCase):
     def test_formula_requires_complete_native_archives(self):
         checksums = "\n".join(f"{'b' * 64}  rag-go_v1.2.3_{os_name}_{arch}.tar.gz"
-                              for os_name in ("darwin", "linux") for arch in ("arm64", "amd64"))
+                              for os_name, arch in formula.PLATFORMS)
         rendered = formula.generate_formula("v1.2.3", checksums)
-        self.assertEqual(rendered.count('      url "'), 4)
-        self.assertEqual(rendered.count('?package=formula"'), 4)
+        self.assertEqual(rendered.count('      url "'), 3)
+        self.assertEqual(rendered.count('?package=formula"'), 3)
+        self.assertNotIn("darwin_amd64", rendered)
         self.assertIn('bin.install "rag"', rendered)
         self.assertNotIn('depends_on "go"', rendered)
         with self.assertRaises(KeyError):

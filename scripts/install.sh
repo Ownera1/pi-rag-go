@@ -14,6 +14,7 @@ while [ "$#" -gt 0 ]; do
 done
 case "$(uname -s)" in Darwin) platform=darwin;; Linux) platform=linux;; *) echo 'Only macOS and Linux are supported' >&2; exit 1;; esac
 case "$(uname -m)" in arm64|aarch64) architecture=arm64;; x86_64|amd64) architecture=amd64;; *) echo 'Unsupported CPU architecture' >&2; exit 1;; esac
+[ "$platform-$architecture" != darwin-amd64 ] || { echo 'Intel Macs are not supported' >&2; exit 1; }
 if [ -z "$version" ]; then
   latest=$(curl --fail --silent --show-error --location --proto '=https' --write-out '%{url_effective}' --output /dev/null "$base/latest")
   version=${latest##*/}

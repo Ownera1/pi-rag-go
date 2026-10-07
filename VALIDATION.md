@@ -36,7 +36,7 @@ No original stores or source documents were migrated or removed. The sibling `ra
 | --- | --- |
 | Actual Voyage / other model provider | Not run; HTTP fixtures establish integration behavior, not external availability, model quality or billing |
 | Actual Claude / Codex tool use | Not run; registration merge/scope/conflict tests establish configuration behavior only |
-| Linux and macOS Intel native execution | Not run locally; release CI retains the four native runner matrix |
+| Linux native execution | Not run locally; release CI retains the three native runner matrix |
 | Published release / installed Homebrew upgrade | Not published; generated Formula and fixture installer checks only |
 
 For live acceptance, follow [migration](MIGRATION.md) with a chosen workspace/provider, check `rag status`, query known passages, reconnect the Agent and invoke `rag_status` and `rag_query` from that Agent. Record its model, corpus, returned passage and provider request outcome separately before claiming end-to-end acceptance.
