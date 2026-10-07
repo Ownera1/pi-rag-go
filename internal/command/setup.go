@@ -1,7 +1,7 @@
 package command
 
 import (
-	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -15,6 +15,9 @@ import (
 	"github.com/Ownera1/rag-go/internal/model"
 	"github.com/Ownera1/rag-go/internal/provider"
 	"github.com/Ownera1/rag-go/internal/workspace"
+	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/huh/spinner"
+	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
 )
 
@@ -38,7 +41,7 @@ func addProviderFlags(fs *flag.FlagSet) providerFlags {
 func (p providerFlags) prompt(t *terminal, supplied map[string]bool) error {
 	var err error
 	if !supplied["embedding-type"] {
-		if *p.kind, err = t.ask("Embedding provider (voyage/openai)", *p.kind); err != nil {
+		if *p.kind, err = t.choose("Embedding provider", *p.kind, "voyage", "openai"); err != nil {
 			return err
 		}
 	}
@@ -108,35 +111,89 @@ func (p providerFlags) apply(cfg *model.ProviderConfig, replace bool, supplied m
 	}
 }
 
+// terminal draws prompts and progress on stderr, keeping stdout for the JSON
+// report. Its methods other than spin are called only when interactive.
 type terminal struct {
 	file        *os.File
-	reader      *bufio.Reader
 	stderr      io.Writer
 	interactive bool
 }
 
 func newTerminal(in io.Reader, stderr io.Writer) *terminal {
 	file, ok := in.(*os.File)
-	return &terminal{file: file, reader: bufio.NewReader(in), stderr: stderr, interactive: ok && term.IsTerminal(int(file.Fd()))}
+	return &terminal{file: file, stderr: stderr, interactive: ok && term.IsTerminal(int(file.Fd()))}
+}
+
+func (t *terminal) show(field huh.Field) error {
+	return huh.NewForm(huh.NewGroup(field)).WithInput(t.file).WithOutput(t.stderr).Run()
+}
+
+// mark leaves a one-line record of a step, since huh clears finished prompts.
+func (t *terminal) mark(ok bool, label, value string) {
+	r := lipgloss.NewRenderer(t.stderr)
+	sign := r.NewStyle().Foreground(lipgloss.Color("2")).Render("✓")
+	if !ok {
+		sign = r.NewStyle().Foreground(lipgloss.Color("1")).Render("✗")
+	}
+	fmt.Fprintf(t.stderr, "%s %s: %s\n", sign, label, value)
 }
 
 func (t *terminal) ask(label, current string) (string, error) {
-	fmt.Fprintf(t.stderr, "%s [%s]: ", label, current)
-	s, e := t.reader.ReadString('\n')
-	if e != nil && !errors.Is(e, io.EOF) {
-		return "", e
+	s := current
+	if err := t.show(huh.NewInput().Title(label).Value(&s)); err != nil {
+		return "", err
 	}
 	if s = strings.TrimSpace(s); s == "" {
 		s = current
 	}
+	t.mark(true, label, s)
 	return s, nil
 }
 
+func (t *terminal) choose(label, current string, options ...string) (string, error) {
+	s := current
+	if err := t.show(huh.NewSelect[string]().Title(label).Options(huh.NewOptions(options...)...).Value(&s)); err != nil {
+		return "", err
+	}
+	t.mark(true, label, s)
+	return s, nil
+}
+
+func (t *terminal) pick(label string, chosen []string, options ...string) ([]string, error) {
+	if err := t.show(huh.NewMultiSelect[string]().Title(label).Value(&chosen).Options(huh.NewOptions(options...)...)); err != nil {
+		return nil, err
+	}
+	t.mark(true, label, cmp.Or(strings.Join(chosen, ", "), "none"))
+	return chosen, nil
+}
+
 func (t *terminal) secret(label string) (string, error) {
-	fmt.Fprintf(t.stderr, "%s (hidden): ", label)
-	b, e := term.ReadPassword(int(t.file.Fd()))
-	fmt.Fprintln(t.stderr)
-	return string(b), e
+	var s string
+	if err := t.show(huh.NewInput().Title(label).EchoMode(huh.EchoModePassword).Value(&s)); err != nil {
+		return "", err
+	}
+	if s != "" {
+		t.mark(true, label, "entered")
+	}
+	return s, nil
+}
+
+// spin runs fn behind a spinner and records its outcome when interactive.
+func (t *terminal) spin(label string, fn func() (string, error)) (string, error) {
+	if !t.interactive {
+		return fn()
+	}
+	var status string
+	err := spinner.New().Title(label).Output(t.stderr).ActionWithErr(func(context.Context) (e error) {
+		status, e = fn()
+		return e
+	}).Run()
+	if err != nil {
+		t.mark(false, label, "failed")
+	} else {
+		t.mark(true, label, status)
+	}
+	return status, err
 }
 
 // probe embeds one query to verify the endpoint, credential and dimensions.

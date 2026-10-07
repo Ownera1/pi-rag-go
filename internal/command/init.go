@@ -199,7 +199,7 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 	checks := map[string]string{"embedding": "not checked (offline)"}
 	var problem error
 	if !*offline {
-		checks["embedding"], problem = probe(ctx, cfg, keys[cfg.Embedding.APIKeyEnv])
+		checks["embedding"], problem = t.spin("Embedding endpoint", func() (string, error) { return probe(ctx, cfg, keys[cfg.Embedding.APIKeyEnv]) })
 	}
 	release()
 	locked = false

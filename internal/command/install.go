@@ -138,10 +138,15 @@ func install(ctx context.Context, args []string, in io.Reader, out, stderr io.Wr
 		}
 		credentials[name] = key
 	}
+	if !supplied["agents"] && t.interactive {
+		if agents, err = t.pick("Register rag-go with", agents, strings.Split(agentNames, ",")...); err != nil {
+			return err
+		}
+	}
 	checks := map[string]string{"embedding": "not checked (offline)"}
 	if !*offline {
 		var problem error
-		if checks["embedding"], problem = probe(ctx, cfg, key); problem != nil {
+		if checks["embedding"], problem = t.spin("Embedding endpoint", func() (string, error) { return probe(ctx, cfg, key) }); problem != nil {
 			// Nothing is saved, so the next run prompts again.
 			return problem
 		}
@@ -161,7 +166,7 @@ func install(ctx context.Context, args []string, in io.Reader, out, stderr io.Wr
 	}
 	results, problem := map[string]string{}, error(nil)
 	for _, agent := range agents {
-		status, e := register(ctx, agent, h, true)
+		status, e := t.spin(agent, func() (string, error) { return register(ctx, agent, h, true) })
 		if e != nil {
 			status = "failed: " + e.Error()
 			problem = errors.Join(problem, fmt.Errorf("%s: %w", agent, e))
