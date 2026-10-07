@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.3.4 (2026-10-07)
 
-- Security: environment variables and user-wide credentials are sent only to Voyage's default endpoint or the one `rag install` recorded. A workspace config can no longer redirect them, or any other environment variable, to its own `baseUrl`; other endpoints use the workspace's own `credentials.json`, which `rag init` fills.
+- Security: environment variables and user-wide credentials are sent only to Voyage's default endpoint or the one `rag install` recorded. A workspace config can no longer redirect them, or any other environment variable, to its own `baseUrl`; other endpoints use the workspace's own `credentials.json`, which `rag init` fills. A workspace on another endpoint that relied on an exported key needs `rag init` once in that workspace.
 - A symlinked documents directory is followed instead of scanning as empty, which removed every indexed document.
 - A MinerU or `rag-source.json` package file directly in the documents root fails the scan instead of silently reducing the whole tree to one document.
 - `.env` files are no longer indexed or sent to the embedding provider.
