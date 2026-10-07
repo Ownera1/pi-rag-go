@@ -144,17 +144,17 @@ func (c *Core) operation(ctx context.Context, write bool) (*session, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fail(err)
 	}
-	credentials, err := workspace.Credentials(s.workspace)
-	if err != nil {
-		return fail(err)
-	}
 	s.embedder, s.reranker = c.opts.Embedder, c.opts.Reranker
 	if s.embedder == nil {
 		p, e := provider.NewHTTP(s.cfg.Embedding, s.cfg.HTTPTimeoutMs, s.cfg.HTTPMaxRetries, s.cfg.Indexing.EmbeddingBatchSize)
 		if e != nil {
 			return fail(e)
 		}
-		p.SetCredential(credentials[s.cfg.Embedding.APIKeyEnv])
+		key, e := workspace.Credential(s.workspace, s.cfg.Embedding)
+		if e != nil {
+			return fail(e)
+		}
+		p.SetCredential(key)
 		s.embedder = p
 	}
 	if s.reranker == nil && s.cfg.Reranker.Type != "none" {
@@ -162,7 +162,11 @@ func (c *Core) operation(ctx context.Context, write bool) (*session, error) {
 		if e != nil {
 			return fail(e)
 		}
-		p.SetCredential(credentials[s.cfg.Reranker.APIKeyEnv])
+		key, e := workspace.Credential(s.workspace, s.cfg.Reranker)
+		if e != nil {
+			return fail(e)
+		}
+		p.SetCredential(key)
 		s.reranker = p
 	}
 	return s, nil

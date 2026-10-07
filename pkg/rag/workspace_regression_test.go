@@ -87,9 +87,10 @@ func TestInputChangedDuringEmbeddingAndSyncCancellationRetainOldDocument(t *test
 	}
 }
 
-func TestWorkspaceCredentialsAreIsolatedAndEnvironmentWins(t *testing.T) {
+func TestWorkspaceCredentialsAreIsolatedAndEnvironmentWinsOnlyWhenTrusted(t *testing.T) {
 	const envName = "RAG_TEST_ISOLATED_CREDENTIAL"
 	t.Setenv(envName, "")
+	t.Setenv("RAG_GO_CONFIG_DIR", t.TempDir())
 	var global atomic.Bool
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -100,9 +101,9 @@ func TestWorkspaceCredentialsAreIsolatedAndEnvironmentWins(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		// The token is the chunk content after the title/section prefix.
+		// The token is the first word of the chunk content after the title/section prefix.
 		input := body.Input[0]
-		want := "Bearer " + input[strings.LastIndex(input, "\n\n")+2:]
+		want := "Bearer " + strings.Fields(input[strings.LastIndex(input, "\n\n")+2:])[0]
 		if global.Load() {
 			want = "Bearer environment"
 		}
@@ -141,13 +142,52 @@ func TestWorkspaceCredentialsAreIsolatedAndEnvironmentWins(t *testing.T) {
 	if os.Getenv(envName) != "" {
 		t.Fatal("Core modified process environment")
 	}
+	// The environment never reaches an endpoint rag install did not record.
 	t.Setenv(envName, "environment")
+	for i, c := range cores {
+		sourceFile(t, docPath(c, "note.txt"), []byte([]string{"one", "two"}[i]+" again"))
+	}
+	syncBoth()
+	dir, _ := workspace.GlobalDir()
+	installed := DefaultConfig()
+	installed.Embedding = ProviderConfig{Type: "openai", Model: "fixture", Dimensions: 2, BaseURL: server.URL, APIKeyEnv: envName}
+	if err := workspace.AtomicJSON(filepath.Join(dir, "config.json"), installed); err != nil {
+		t.Fatal(err)
+	}
 	global.Store(true)
 	for _, c := range cores {
 		sourceFile(t, docPath(c, "note.txt"), []byte("updated"))
 	}
 	syncBoth()
-	if calls.Load() != 4 {
+	if calls.Load() != 6 {
+		t.Fatalf("provider calls: %d", calls.Load())
+	}
+}
+
+func TestWorkspaceConfigCannotRedirectAmbientCredentials(t *testing.T) {
+	t.Setenv("RAG_GO_CONFIG_DIR", t.TempDir())
+	t.Setenv("RAG_TEST_AMBIENT_TOKEN", "never-leaves")
+	dir, _ := workspace.GlobalDir()
+	if err := workspace.AtomicJSON(filepath.Join(dir, "credentials.json"), map[string]string{"VOYAGE_API_KEY": "user-wide"}); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		t.Errorf("credential redirected: %q", r.Header.Get("Authorization"))
+	}))
+	defer server.Close()
+	for _, envName := range []string{"VOYAGE_API_KEY", "RAG_TEST_AMBIENT_TOKEN"} {
+		cfg := DefaultConfig()
+		cfg.Embedding = ProviderConfig{Type: "openai", Model: "fixture", Dimensions: 2, BaseURL: server.URL, APIKeyEnv: envName}
+		c := configuredCore(t, t.TempDir(), cfg, nil)
+		defer c.Close()
+		sourceFile(t, docPath(c, "note.txt"), []byte("private"))
+		if r, err := c.Sync(context.Background()); err == nil || r.Failed != 1 || !strings.Contains(r.Failures[0].Error, "is unset") {
+			t.Fatalf("%s: %+v %v", envName, r, err)
+		}
+	}
+	if calls.Load() != 0 {
 		t.Fatalf("provider calls: %d", calls.Load())
 	}
 }
@@ -210,5 +250,46 @@ func TestInitialDatabaseStampCancellationCanRetryAndMetadataIsAtomic(t *testing.
 	var count int
 	if err = db.SQL.QueryRow("SELECT COUNT(*) FROM metadata").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("partial metadata: %d %v", count, err)
+	}
+}
+
+func TestSymlinkedDocumentsRootKeepsIndex(t *testing.T) {
+	c := openTest(t, t.TempDir(), fakeEmbedding{})
+	defer c.Close()
+	docs := filepath.Dir(docPath(c, "note.txt"))
+	sourceFile(t, docPath(c, "note.txt"), []byte("linked evidence"))
+	if r, err := c.Sync(context.Background()); err != nil || r.Indexed != 1 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	// Moving the documents elsewhere behind a symlink must not empty the index.
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.Rename(docs, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, docs); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := c.Sync(context.Background()); err != nil || r.Removed != 0 || r.Indexed != 0 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if list, err := c.ListDocuments(context.Background()); err != nil || len(list) != 1 || list[0] != docPath(c, "note.txt") {
+		t.Fatalf("%+v %v", list, err)
+	}
+}
+
+func TestPackageAtDocumentsRootFailsClosed(t *testing.T) {
+	c := openTest(t, t.TempDir(), fakeEmbedding{})
+	defer c.Close()
+	sourceFile(t, docPath(c, "notes.md"), []byte("independent evidence"))
+	sourceFile(t, docPath(c, "code/main.go"), []byte("package main"))
+	if r, err := c.Sync(context.Background()); err != nil || r.Indexed != 2 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	sourceFile(t, docPath(c, "paper_content_list.json"), []byte(`[{"type":"text","text":"paper evidence","page_idx":0}]`))
+	if r, err := c.Sync(context.Background()); err == nil || r.Removed != 0 || !strings.Contains(r.Failures[0].Error, "own folder") {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if list, err := c.ListDocuments(context.Background()); err != nil || len(list) != 2 {
+		t.Fatalf("%+v %v", list, err)
 	}
 }

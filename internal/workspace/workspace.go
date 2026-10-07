@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"syscall"
 	"time"
+
+	"github.com/Ownera1/rag-go/internal/model"
 )
 
 func Store(root string) string { return filepath.Join(root, ".rag-go") }
@@ -136,21 +138,58 @@ func GlobalDir() (string, error) {
 	return filepath.Join(home, ".config", "rag-go"), nil
 }
 
-// Credentials resolves workspace credentials over user-wide ones. Environment
-// variables still take precedence inside providers.
-func Credentials(root string) (map[string]string, error) {
-	values, err := GlobalCredentials()
+// GlobalConfig returns the user-wide defaults written by rag install.
+func GlobalConfig() (model.Config, bool, error) {
+	dir, err := GlobalDir()
 	if err != nil {
-		return nil, err
+		return model.Config{}, false, err
+	}
+	path := filepath.Join(dir, "config.json")
+	if _, err = os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return model.DefaultConfig(), false, nil
+	}
+	cfg, err := model.LoadConfig(path)
+	if err != nil {
+		return cfg, false, fmt.Errorf("%s: %w", path, err)
+	}
+	return cfg, true, nil
+}
+
+// TrustedEndpoint reports whether p is Voyage's default endpoint or the one
+// rag install recorded, the only ones that receive ambient credentials.
+func TrustedEndpoint(p model.ProviderConfig) (bool, error) {
+	d := model.DefaultConfig().Embedding
+	if p.BaseURL == d.BaseURL && p.APIKeyEnv == d.APIKeyEnv {
+		return true, nil
+	}
+	g, installed, err := GlobalConfig()
+	return installed && p.BaseURL == g.Embedding.BaseURL && p.APIKeyEnv == g.Embedding.APIKeyEnv, err
+}
+
+// Credential resolves p's key from the environment, the workspace, then the
+// user-wide file. A workspace config may come from a cloned repository, so the
+// environment and user-wide file serve only a trusted endpoint; workspace
+// credentials belong to that workspace.
+func Credential(root string, p model.ProviderConfig) (string, error) {
+	if p.APIKeyEnv == "" {
+		return "", nil
 	}
 	local, err := LocalCredentials(root)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	for k, v := range local {
-		values[k] = v
+	trusted, err := TrustedEndpoint(p)
+	if err != nil || !trusted {
+		return local[p.APIKeyEnv], err
 	}
-	return values, nil
+	if key := os.Getenv(p.APIKeyEnv); key != "" {
+		return key, nil
+	}
+	if key := local[p.APIKeyEnv]; key != "" {
+		return key, nil
+	}
+	global, err := GlobalCredentials()
+	return global[p.APIKeyEnv], err
 }
 
 func LocalCredentials(root string) (map[string]string, error) {

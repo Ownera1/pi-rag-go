@@ -9,7 +9,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -42,15 +41,10 @@ func NewHTTP(cfg model.ProviderConfig, timeoutMs, retries int, batchSizes ...int
 	return &HTTP{cfg: cfg, client: &http.Client{Timeout: time.Duration(timeoutMs) * time.Millisecond}, retries: retries, batchSize: batch}, nil
 }
 
-// SetCredential supplies a workspace fallback without changing process environment.
-// Call before publishing the provider to other goroutines.
+// SetCredential supplies the key resolved by workspace.Credential; the provider
+// never reads the environment itself. Call before publishing the provider to
+// other goroutines.
 func (p *HTTP) SetCredential(key string) { p.credential = key }
-func (p *HTTP) apiKey() string {
-	if key := os.Getenv(p.cfg.APIKeyEnv); key != "" {
-		return key
-	}
-	return p.credential
-}
 
 func (p *HTTP) Model() string { return p.cfg.Model }
 
@@ -72,11 +66,10 @@ func (p *HTTP) post(ctx context.Context, path string, body any, out any) error {
 		}
 		req.Header.Set("Content-Type", "application/json")
 		if p.cfg.APIKeyEnv != "" {
-			key := p.apiKey()
-			if key == "" {
-				return fmt.Errorf("%s is unset", p.cfg.APIKeyEnv)
+			if p.credential == "" {
+				return fmt.Errorf("%s is unset; environment and user-wide keys go only to the endpoint rag install recorded", p.cfg.APIKeyEnv)
 			}
-			req.Header.Set("Authorization", "Bearer "+key)
+			req.Header.Set("Authorization", "Bearer "+p.credential)
 		}
 		res, e := p.client.Do(req)
 		retry := false
@@ -91,8 +84,8 @@ func (p *HTTP) post(ctx context.Context, path string, body any, out any) error {
 				retry = true
 			} else if res.StatusCode < 200 || res.StatusCode >= 300 {
 				message := string(raw)
-				if key := p.apiKey(); key != "" {
-					message = strings.ReplaceAll(message, key, "[redacted]")
+				if p.credential != "" {
+					message = strings.ReplaceAll(message, p.credential, "[redacted]")
 				}
 				err = fmt.Errorf("model HTTP %d: %s", res.StatusCode, message[:min(len(message), 200)])
 				retry = res.StatusCode == 429 || res.StatusCode >= 500

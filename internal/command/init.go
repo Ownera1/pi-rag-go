@@ -85,7 +85,7 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 	}
 	// A new workspace copies the user-wide defaults from rag install, so later
 	// global changes never invalidate an existing index.
-	global, installed, err := loadGlobalConfig()
+	global, installed, err := workspace.GlobalConfig()
 	if err != nil {
 		return err
 	}
@@ -139,14 +139,20 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 		}
 		// Persist environment and typed keys in the workspace for agents that
 		// do not inherit the shell environment, unless rag install holds one.
+		// Queries send the environment and user-wide keys only to a trusted
+		// endpoint, so any other endpoint keeps its own copy.
+		trusted, err := workspace.TrustedEndpoint(p)
+		if err != nil {
+			return err
+		}
 		value := os.Getenv(name)
-		if value != "" && shared[name] == "" {
+		if value != "" && (shared[name] == "" || !trusted) {
 			local[name] = value
 		}
 		if value == "" {
 			value = local[name]
 		}
-		if value == "" {
+		if value == "" && trusted {
 			value = shared[name]
 		}
 		if value == "" && t.interactive {
@@ -228,6 +234,9 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 
 // hasDocuments reports whether dir holds any visible file to index.
 func hasDocuments(dir string) bool {
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = real
+	}
 	found := false
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {

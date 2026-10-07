@@ -15,7 +15,6 @@ import (
 
 func TestProviderErrorRedactsCredentialBeforeTruncation(t *testing.T) {
 	key := strings.Repeat("private-credential-", 15)
-	t.Setenv("RAG_TEST_PROVIDER_SECRET", key)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(401)
 		w.Write([]byte("invalid key: " + key))
@@ -25,6 +24,7 @@ func TestProviderErrorRedactsCredentialBeforeTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.SetCredential(key)
 	_, err = p.EmbedQuery(context.Background(), "test")
 	if err == nil || strings.Contains(err.Error(), "private-credential") || !strings.Contains(err.Error(), "[redacted]") {
 		t.Fatal(err)
