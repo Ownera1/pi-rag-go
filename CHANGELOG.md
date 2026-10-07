@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.1 (2026-10-07)
+
+- `rag install`/`rag uninstall` also register `rag mcp` with Claude Desktop, Antigravity (IDE and `agy` CLI, `~/.gemini/config/mcp_config.json`) and pi (`~/.pi/agent/mcp.json`), editing only `mcpServers.rag-go`. `--agents` accepts `claude,codex,claude-desktop,antigravity,pi`.
+- The MCP server reports the build version in `serverInfo` instead of a hard-coded `0.2.0`.
+
 ## v0.3.0 (2026-10-06)
 
 Existing v0.2 indexes report `rebuild required`; run `rag rebuild` once after upgrading.
