@@ -198,7 +198,7 @@ python3 scripts/test-release.py
 
 Smoke suite 使用解压后的实际二进制和固定的本地 HTTP provider，检查独立查询、自动同步、FTS5/sqlite-vec、来源页码、stdio/HTTP MCP、重建、清理及四种评估模式。多进程测试覆盖共享读取、串行写入、锁取消和重复 embedding 防护。详见 [本地验收记录](VALIDATION.md) 及 [Zotero 验证记录](ZOTERO.md#验证记录)。这些检查验证本地行为，真实 provider 质量、费用、Agent 调用及跨平台发行另行验收。
 
-发布保留 macOS/Linux arm64/amd64 原生压缩包、SHA-256 校验和预编译 Homebrew Formula。压缩包包含 `rag`、LICENSE 和 README。脚本安装器只安装 `rag`，校验失败时保留原有二进制；旧版系统服务和 legacy executables 按 [迁移说明](MIGRATION.md) 处理。
+发布保留 macOS arm64 与 Linux arm64/amd64 原生压缩包、SHA-256 校验和预编译 Homebrew Formula。压缩包包含 `rag`、LICENSE 和 README。脚本安装器只安装 `rag`，校验失败时保留原有二进制；旧版系统服务和 legacy executables 按 [迁移说明](MIGRATION.md) 处理。
 
 ## 评估与 Go API
 

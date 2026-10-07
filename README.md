@@ -142,7 +142,7 @@ python3 scripts/test-release.py
 
 The smoke suite uses an actual extracted binary and deterministic local HTTP providers. It checks standalone queries, automatic sync, FTS5/sqlite-vec, source pages, real stdio and HTTP MCP, rebuild/clean and all four evaluation modes. Multi-process race tests cover shared readers, serialized writers, lock cancellation and duplicate embedding prevention. See [local acceptance and live acceptance boundaries](VALIDATION.md). These establish local behavior, not live provider quality, billing, Claude/Codex acceptance or all-platform release success.
 
-Releases retain native macOS/Linux arm64/amd64 archives, SHA-256 verification and a precompiled Homebrew Formula. The archive contains only `rag`, LICENSE and README. The script installer installs only `rag`, verifies checksums and preserves an existing binary on verification failure. It does not manage old system services or remove legacy executables.
+Releases retain native macOS arm64 and Linux arm64/amd64 archives, SHA-256 verification and a precompiled Homebrew Formula. The archive contains only `rag`, LICENSE and README. The script installer installs only `rag`, verifies checksums and preserves an existing binary on verification failure. It does not manage old system services or remove legacy executables.
 
 ## Evaluation and Go API
 

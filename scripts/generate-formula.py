@@ -5,6 +5,8 @@ import json
 import re
 from pathlib import Path
 
+PLATFORMS = (("darwin", "arm64"), ("linux", "arm64"), ("linux", "amd64"))
+
 
 def read_checksums(version: str, checksums: str) -> dict:
     if not re.fullmatch(r"v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?", version):
@@ -15,9 +17,8 @@ def read_checksums(version: str, checksums: str) -> dict:
         if not re.fullmatch(r"[0-9a-f]{64}", digest) or name in hashes:
             raise ValueError("invalid or duplicate checksum")
         hashes[name] = digest
-    for os_name in ("darwin", "linux"):
-        for arch in ("arm64", "amd64"):
-            hashes[f"rag-go_{version}_{os_name}_{arch}.tar.gz"]
+    for os_name, arch in PLATFORMS:
+        hashes[f"rag-go_{version}_{os_name}_{arch}.tar.gz"]
     return hashes
 
 
@@ -27,6 +28,8 @@ def generate_formula(version: str, checksums: str) -> str:
     for os_name, ruby_os in (("darwin", "macos"), ("linux", "linux")):
         platforms = []
         for arch, ruby_arch in (("arm64", "arm"), ("amd64", "intel")):
+            if (os_name, arch) not in PLATFORMS:
+                continue
             name = f"rag-go_{version}_{os_name}_{arch}.tar.gz"
             platforms.append(f'''    on_{ruby_arch} do
       url "https://github.com/Ownera1/rag-go/releases/download/{version}/{name}?package=formula"

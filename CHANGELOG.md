@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.3 (2026-10-07)
+
+- Intel Macs are no longer supported: releases, the Homebrew Formula and `install.sh` cover macOS arm64 and Linux arm64/amd64.
+
 ## v0.3.2 (2026-10-07)
 
 - In a terminal, `rag install` and `rag init` ask with arrow-key menus, a masked key field and spinners for the embedding probe and each agent registration. `rag install` without `--agents` shows a checklist of agents with the detected ones ticked. Non-interactive runs and the JSON report are unchanged.
