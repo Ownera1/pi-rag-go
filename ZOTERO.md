@@ -62,7 +62,7 @@ Zotero 9 的库版本不能检测所有本地编辑，分页核验也不是服�
 
 每次成功的正文 sync/rebuild 会根据缓存重新做精确匹配，不访问 Zotero API。旧索引中的文档在 metadata sync/match 时补录稳定标识；只有源文件哈希仍与已索引内容一致时才补录，无需 embedding。文件已经改变时先执行正常的 `rag sync`。
 
-匹配顺序为：保留已锁定关联、Manifest 显式引用、API 提供的准确附件路径、Manifest 中的唯一 DOI。附件需要关联到其 bibliographic parent。重复 DOI 不自动选择；`rag zotero match` 返回标题相似候选，但不会将候选写成关联。候选分数表示标题词重合度，不是概率。
+匹配顺序为：保留已锁定关联、Manifest 显式引用、API 提供的准确附件路径、附件文件名、Manifest 中的唯一 DOI。没有 `sourcePath` 的文档若位于 MinerU Desktop 输出目录 `<原文件名>-<uuid>` 中，去掉 uuid 后与附件 `filename` 精确比对，唯一命中才关联；Zotero 重命名时截断的标题与目录名一致，不影响匹配。附件需要关联到其 bibliographic parent。重复 DOI 不自动选择；`rag zotero match` 返回标题相似候选，但不会将候选写成关联。候选分数表示标题词重合度，不是概率。
 
 Manifest 可增加可选的 `doi` 和 `zotero` 字段：
 

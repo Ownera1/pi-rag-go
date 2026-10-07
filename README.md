@@ -133,9 +133,9 @@ export CGO_CFLAGS="$(scripts/cgo-flags.sh)"
 go test -race -tags sqlite_fts5 ./...
 go vet -tags sqlite_fts5 ./...
 go build -tags sqlite_fts5 -o bin/rag ./cmd/rag
-./scripts/package.sh v0.2.0-local dist
+./scripts/package.sh v0.3.0-local dist
 mkdir -p /tmp/rag-go-extracted
-tar -xzf dist/rag-go_v0.2.0-local_$(go env GOOS)_$(go env GOARCH).tar.gz -C /tmp/rag-go-extracted
+tar -xzf dist/rag-go_v0.3.0-local_$(go env GOOS)_$(go env GOARCH).tar.gz -C /tmp/rag-go-extracted
 python3 scripts/smoke-release.py /tmp/rag-go-extracted
 python3 scripts/test-release.py
 ```
