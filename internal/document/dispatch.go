@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,22 +63,26 @@ func InputFingerprint(ctx context.Context, path string) (string, error) {
 		return "", err
 	}
 	hash := ShortHash(string(b))
-	if filepath.Base(path) != "rag-source.json" {
-		return hash, ctx.Err()
+	if filepath.Base(path) == "rag-source.json" {
+		var m Manifest
+		if err = json.Unmarshal(b, &m); err != nil {
+			return hash, err
+		}
+		content, err := localContent(filepath.Dir(path), m.ContentPath)
+		if err != nil {
+			return hash, err
+		}
+		data, err := readFile(content)
+		if err != nil {
+			return hash, err
+		}
+		hash = ShortHash(string(b) + "\x00" + string(data))
 	}
-	var m Manifest
-	if err = json.Unmarshal(b, &m); err != nil {
-		return hash, err
-	}
-	content, err := localContent(filepath.Dir(path), m.ContentPath)
+	fix, err := fixes(path)
 	if err != nil {
 		return hash, err
 	}
-	data, err := readFile(content)
-	if err != nil {
-		return hash, err
-	}
-	return ShortHash(string(b) + "\x00" + string(data)), ctx.Err()
+	return withFixes(hash, fix), ctx.Err()
 }
 
 // InputStamp identifies the files InputFingerprint reads by metadata alone and
@@ -99,10 +104,16 @@ func InputStamp(path string) (string, time.Time, error) {
 		}
 		files = append(files, content)
 	}
+	if hasFixes(path) {
+		files = append(files, filepath.Join(filepath.Dir(path), FixesFile))
+	}
 	var stamp strings.Builder
 	var newest time.Time
 	for _, f := range files {
 		st, err := os.Stat(f)
+		if errors.Is(err, fs.ErrNotExist) && filepath.Base(f) == FixesFile {
+			continue
+		}
 		if err != nil {
 			return "", time.Time{}, err
 		}
@@ -118,7 +129,81 @@ func InputStamp(path string) (string, time.Time, error) {
 	return stamp.String(), newest, nil
 }
 
+// FixesFile holds a package's hand corrections: one "wrong<TAB>right" pair per
+// line, applied in order to the parsed text. Lines starting with # are comments.
+const FixesFile = "rag-fixes.tsv"
+
+// hasFixes reports whether path is a MinerU or manifest package, the only
+// documents a directory-wide correction file can belong to.
+func hasFixes(path string) bool {
+	return filepath.Base(path) == "rag-source.json" || IsMinerUFile(path)
+}
+
+func fixes(path string) ([]byte, error) {
+	if !hasFixes(path) {
+		return nil, nil
+	}
+	b, err := readFile(filepath.Join(filepath.Dir(path), FixesFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	return b, err
+}
+
+func withFixes(hash string, fix []byte) string {
+	if fix == nil {
+		return hash
+	}
+	return ShortHash(hash + "\x00" + string(fix))
+}
+
+// applyFixes fails on a pair that matches nothing, so a typo or a fix made
+// stale by a MinerU rerun surfaces instead of being silently kept.
+func applyFixes(blocks []model.Block, fix []byte) ([]model.Block, error) {
+	for i, line := range strings.Split(string(fix), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		wrong, right, ok := strings.Cut(line, "\t")
+		if !ok || wrong == "" {
+			return nil, fmt.Errorf("%s line %d: want wrong<TAB>right", FixesFile, i+1)
+		}
+		found := false
+		for j := range blocks {
+			if strings.Contains(blocks[j].Text, wrong) {
+				blocks[j].Text = strings.ReplaceAll(blocks[j].Text, wrong, right)
+				found = true
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("%s line %d: %q not found", FixesFile, i+1, wrong)
+		}
+	}
+	out := blocks[:0]
+	for _, b := range blocks {
+		if strings.TrimSpace(b.Text) != "" {
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
+
 func Parse(ctx context.Context, path string) (model.Document, error) {
+	d, err := parse(ctx, path)
+	if err != nil {
+		return d, err
+	}
+	fix, err := fixes(d.Path)
+	if err != nil || fix == nil {
+		return d, err
+	}
+	d.Hash = withFixes(d.Hash, fix)
+	d.Blocks, err = applyFixes(d.Blocks, fix)
+	return d, err
+}
+
+func parse(ctx context.Context, path string) (model.Document, error) {
 	if err := ctx.Err(); err != nil {
 		return model.Document{}, err
 	}

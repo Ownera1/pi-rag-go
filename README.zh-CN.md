@@ -88,6 +88,8 @@ my-project/
 
 一个文档包选择一个 canonical 表示。`rag-source.json` 优先；可识别的 MinerU 文件夹选择一种 JSON 表示，排除 Markdown、metadata 和其他伴随文件。混有多篇论文且无法确定边界的 MinerU 目录会报错并要求拆分。普通文件仍作为独立文档处理；扫描忽略 PDF 等不支持的资源。
 
+要更正 OCR 错误而不改 MinerU 原件，在文档包目录下放一个 `rag-fixes.tsv`，每行一对 `错误文本<Tab>正确文本`（`#` 开头为注释），按顺序替换解析后的正文。错误文本直接从查询结果复制，LaTeX 反斜杠照写原样。某行一处都没匹配到时，该文档解析失败并报出行号，避免拼错或因 MinerU 重跑而过期的更正被悄悄忽略。修改该文件会触发重新索引。
+
 可选的来源 Manifest：
 
 ```json
@@ -124,7 +126,7 @@ rag query 'channel estimation' --mode bm25 --no-sync \
 
 默认连接 `http://127.0.0.1:23119/api/` 的 `user/0`，并从响应解析实际个人库 ID。群组库、连接地址和 macOS 按需启动配置见 [Zotero 使用说明](ZOTERO.md)。正文同步与 Zotero 快照同步是两个独立操作；普通查询使用缓存的 metadata。
 
-关联优先保留手工锁定结果，再处理 Manifest 显式引用、经 API 验证的附件路径及唯一 DOI。标题相似匹配只生成候选。稳定 document key 优先使用 Manifest 中有效的原始文件 `sourceHash`，否则使用 canonical 文件内容哈希。锁定关联在条目被删除后保留并标记孤儿；写入 Manifest 的引用可随文档迁移。
+关联优先保留手工锁定结果，再处理 Manifest 显式引用、经 API 验证的附件路径、附件文件名及唯一 DOI。没有 Manifest 的 MinerU Desktop 输出目录（`<原文件名>-<uuid>`）去掉 uuid 后缀后，与 Zotero 附件文件名精确比对，唯一命中即自动关联。标题相似匹配只生成候选。稳定 document key 优先使用 Manifest 中有效的原始文件 `sourceHash`，否则使用 canonical 文件内容哈希。锁定关联在条目被删除后保留并标记孤儿；写入 Manifest 的引用可随文档迁移。
 
 检索命中可携带 title、abstract、date/year、publication、DOI、creators、tags、collections 及关联状态。年份、标签和 collection 过滤在 BM25、中文 FTS 和向量检索的 top-k 截断前生效。重复标签或 collection 条件表示 AND，collection 仅包含直接成员；空匹配集合返回零结果。
 
