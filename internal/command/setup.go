@@ -216,19 +216,3 @@ func globalConfigPath() (string, error) {
 	}
 	return filepath.Join(dir, "config.json"), nil
 }
-
-// loadGlobalConfig returns the user-wide defaults written by rag install.
-func loadGlobalConfig() (model.Config, bool, error) {
-	path, err := globalConfigPath()
-	if err != nil {
-		return model.Config{}, false, err
-	}
-	if _, err = os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return model.DefaultConfig(), false, nil
-	}
-	cfg, err := model.LoadConfig(path)
-	if err != nil {
-		return cfg, false, fmt.Errorf("%s: %w", path, err)
-	}
-	return cfg, true, nil
-}

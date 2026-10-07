@@ -97,7 +97,7 @@ func install(ctx context.Context, args []string, in io.Reader, out, stderr io.Wr
 	if err != nil {
 		return err
 	}
-	cfg, installed, err := loadGlobalConfig()
+	cfg, installed, err := workspace.GlobalConfig()
 	if err != nil {
 		return err
 	}

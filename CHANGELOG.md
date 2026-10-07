@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Security: environment variables and user-wide credentials are sent only to Voyage's default endpoint or the one `rag install` recorded. A workspace config can no longer redirect them, or any other environment variable, to its own `baseUrl`; other endpoints use the workspace's own `credentials.json`, which `rag init` fills.
+- A symlinked documents directory is followed instead of scanning as empty, which removed every indexed document.
+- A MinerU or `rag-source.json` package file directly in the documents root fails the scan instead of silently reducing the whole tree to one document.
+- `.env` files are no longer indexed or sent to the embedding provider.
+
 ## v0.3.3 (2026-10-07)
 
 - Intel Macs are no longer supported: releases, the Homebrew Formula and `install.sh` cover macOS arm64 and Linux arm64/amd64.

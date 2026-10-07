@@ -42,7 +42,7 @@ var allowed = map[string]bool{
 	".yaml": true, ".yml": true, ".toml": true, ".ini": true, ".xml": true,
 	".csv": true, ".tsv": true, ".sh": true, ".bash": true, ".zsh": true,
 	".fish": true, ".ps1": true, ".sql": true, ".graphql": true, ".gql": true,
-	".proto": true, ".env": true, ".gitignore": true, ".dockerfile": true, ".tf": true,
+	".proto": true, ".gitignore": true, ".dockerfile": true, ".tf": true,
 	".hcl": true, ".docx": true, ".html": true, ".htm": true, ".nxml": true,
 }
 
@@ -59,8 +59,16 @@ func scan(ctx context.Context, root string, patterns []string, ignoredRoots ...s
 	if e != nil {
 		return nil, e
 	}
+	// WalkDir does not follow a symlinked root, which would read as an empty
+	// tree and remove every document. Walk the target but keep paths under
+	// root so document keys stay stable.
+	real, e := filepath.EvalSymlinks(root)
+	if e != nil {
+		return nil, e
+	}
 	for _, ignored := range ignoredRoots {
-		if within(ignored, root) {
+		resolved, _ := filepath.EvalSymlinks(ignored)
+		if within(ignored, root) || resolved != "" && within(resolved, real) {
 			return nil, fmt.Errorf("store contents cannot be tracked: %s", root)
 		}
 	}
@@ -79,13 +87,18 @@ func scan(ctx context.Context, root string, patterns []string, ignoredRoots ...s
 	}
 	ig := gitignore.CompileIgnoreLines(patterns...)
 	found := []string{}
-	err := filepath.WalkDir(root, func(p string, d os.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(real, func(p string, d os.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if walkErr != nil {
 			return walkErr
 		}
+		rel, e := filepath.Rel(real, p)
+		if e != nil {
+			return e
+		}
+		p = filepath.Join(root, rel)
 		for _, ignored := range ignoredRoots {
 			if within(ignored, p) {
 				if d.IsDir() {
@@ -96,10 +109,6 @@ func scan(ctx context.Context, root string, patterns []string, ignoredRoots ...s
 		}
 		if p == root {
 			return nil
-		}
-		rel, e := filepath.Rel(root, p)
-		if e != nil {
-			return e
 		}
 		rel = filepath.ToSlash(rel)
 		if ig.MatchesPath(rel) {
@@ -125,6 +134,13 @@ func scan(ctx context.Context, root string, patterns []string, ignoredRoots ...s
 	sort.Strings(found)
 	if err != nil {
 		return nil, err
+	}
+	// A package folder covers everything below it, so one at the root would
+	// silently reduce the whole tree to a single document.
+	for _, p := range found {
+		if filepath.Dir(p) == root && (filepath.Base(p) == "rag-source.json" || document.IsMinerUFile(p)) {
+			return nil, fmt.Errorf("%s makes the whole documents directory one package; move the package into its own folder", p)
+		}
 	}
 	return document.CanonicalFiles(ctx, found)
 }

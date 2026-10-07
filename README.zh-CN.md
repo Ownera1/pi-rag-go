@@ -34,7 +34,7 @@ rag install --embedding-type openai --model YOUR_MODEL --dimensions YOUR_DIMENSI
 rag init ~/Projects/my-project --docs /absolute/converted-papers
 ```
 
-未执行 `rag install` 时，`rag init` 会询问文档目录、embedding 服务、模型及 API key（不回显），并把 key 保存在工作区；它接受与 `rag install` 相同的服务参数。凭据依次从环境变量、工作区、全局文件读取。`--no-sync` 跳过初始索引；`--offline` 跳过在线 embedding 探测和初始索引。重复初始化保留已有设置，只更新显式指定的选项；配置损坏时会报错。修改文档根目录、embedding 或分块配置后，需要执行 `rag rebuild`。
+未执行 `rag install` 时，`rag init` 会询问文档目录、embedding 服务、模型及 API key（不回显），并把 key 保存在工作区；它接受与 `rag install` 相同的服务参数。凭据依次从环境变量、工作区、全局文件读取。环境变量和全局文件只发给 Voyage 默认地址或 `rag install` 记录的地址，克隆仓库中的工作区配置无法把它们转发到别处；其他地址只使用 `rag init` 保存在该工作区的 key。`--no-sync` 跳过初始索引；`--offline` 跳过在线 embedding 探测和初始索引。重复初始化保留已有设置，只更新显式指定的选项；配置损坏时会报错。修改文档根目录、embedding 或分块配置后，需要执行 `rag rebuild`。
 
 ## 工作区与同步
 
@@ -86,7 +86,7 @@ my-project/
 | HTML | main/article/body 文字及基础隐藏、导航过滤 | 页码未知 |
 | TXT、代码及其他支持的 UTF-8 文本 | 纯文本 | 文本行号 |
 
-一个文档包选择一个 canonical 表示。`rag-source.json` 优先；可识别的 MinerU 文件夹选择一种 JSON 表示，排除 Markdown、metadata 和其他伴随文件。混有多篇论文且无法确定边界的 MinerU 目录会报错并要求拆分。普通文件仍作为独立文档处理；扫描忽略 PDF 等不支持的资源。
+一个文档包选择一个 canonical 表示。`rag-source.json` 优先；可识别的 MinerU 文件夹选择一种 JSON 表示，排除 Markdown、metadata 和其他伴随文件。混有多篇论文且无法确定边界的 MinerU 目录会报错并要求拆分。普通文件仍作为独立文档处理。文档包覆盖其子目录，因此文档根目录下直接出现的包文件会使扫描报错，而不是隐藏其他所有文档；扫描忽略 PDF 等不支持的资源。
 
 要更正 OCR 错误而不改 MinerU 原件，在文档包目录下放一个 `rag-fixes.tsv`，每行一对 `错误文本<Tab>正确文本`（`#` 开头为注释），按顺序替换解析后的正文。错误文本直接从查询结果复制，LaTeX 反斜杠照写原样。某行一处都没匹配到时，该文档解析失败并报出行号，避免拼错或因 MinerU 重跑而过期的更正被悄悄忽略。修改该文件会触发重新索引。
 
@@ -158,7 +158,7 @@ rag connect codex
 
 配置示例见 [config.example.json](config.example.json)。`documents` 默认相对工作区解析，也可使用绝对路径。`excludePatterns` 使用 Gitignore 风格匹配，扫描默认排除隐藏目录、构建/缓存目录和 `.rag-go`。
 
-环境变量凭据优先于 `.rag-go/credentials.json`。凭据直接传给 provider，不修改进程环境。存储目录权限为 `0700`，凭据和 JSON 状态权限为 `0600`；配置、索引和 status 输出不保存或打印密钥。
+对可信地址，环境变量凭据优先于 `.rag-go/credentials.json`；其他地址只接收工作区凭据。凭据直接传给 provider，不修改进程环境。存储目录权限为 `0700`，凭据和 JSON 状态权限为 `0600`；配置、索引和 status 输出不保存或打印密钥。
 
 Embedding 支持 Voyage，以及接收 `POST {baseUrl}/embeddings` 并返回 `data[{index,embedding}]` 的 OpenAI-compatible 服务。可选 rerank 支持 Voyage 或通用 HTTP `POST {baseUrl}/rerank`，请求为 `{model,query,documents,top_n}`，响应为 `results[{index,relevance_score}]`。`none` 禁用 rerank。
 

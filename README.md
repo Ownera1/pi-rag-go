@@ -34,7 +34,7 @@ rag install --embedding-type openai --model YOUR_MODEL --dimensions YOUR_DIMENSI
 rag init ~/Projects/my-project --docs /absolute/converted-papers
 ```
 
-Without `rag install`, `rag init` asks for the documents directory, embedding provider/model and hidden API key, and stores the key in the workspace; it accepts the same provider options as `rag install`. Credentials resolve from the environment, then the workspace, then the user-wide file. `--no-sync` skips initial indexing; `--offline` skips the live embedding probe and indexing. Repeating initialization preserves settings except explicitly supplied options; damaged configuration is rejected. A documents-root, embedding or chunking change requires `rag rebuild`.
+Without `rag install`, `rag init` asks for the documents directory, embedding provider/model and hidden API key, and stores the key in the workspace; it accepts the same provider options as `rag install`. Credentials resolve from the environment, then the workspace, then the user-wide file. The environment and the user-wide file serve only Voyage's default endpoint or the one `rag install` recorded, so a workspace config from a cloned repository cannot redirect them; any other endpoint uses the key `rag init` stored in its workspace. `--no-sync` skips initial indexing; `--offline` skips the live embedding probe and indexing. Repeating initialization preserves settings except explicitly supplied options; damaged configuration is rejected. A documents-root, embedding or chunking change requires `rag rebuild`.
 
 ## Workspace and synchronization
 
@@ -75,7 +75,7 @@ Every operation reloads configuration, state and the active database. Reads hold
 | HTML | Main/article/body text with baseline hidden/navigation filtering | Unknown pages |
 | TXT, code and other supported UTF-8 text | Plain text | Text lines |
 
-One document folder produces one canonical representation. Existing `rag-source.json` manifests take precedence; recognizable MinerU folders select one JSON representation and exclude Markdown, metadata and other companions. Ambiguous multi-paper MinerU directories fail with instructions to split them into separate folders. Ordinary files outside such packages remain independent documents. PDF and other unsupported assets are ignored during scanning.
+One document folder produces one canonical representation. Existing `rag-source.json` manifests take precedence; recognizable MinerU folders select one JSON representation and exclude Markdown, metadata and other companions. Ambiguous multi-paper MinerU directories fail with instructions to split them into separate folders. Ordinary files outside such packages remain independent documents. A package covers its subfolders, so a package file directly in the documents root fails the scan instead of hiding every other document. PDF and other unsupported assets are ignored during scanning.
 
 To correct OCR errors without editing MinerU output, put a `rag-fixes.tsv` in the package folder: one `wrong<TAB>right` pair per line (`#` starts a comment), applied in order to the parsed text. Copy the wrong text from query results; LaTeX backslashes are written as-is. A pair that matches nothing fails the document with its line number, so typos and fixes made stale by a MinerU rerun surface. Editing the file triggers reindexing.
 
@@ -116,7 +116,7 @@ Optional Zotero Local API integration uses a persistent `catalog.db`, independen
 
 See [config.example.json](config.example.json). Configuration and indexing state are separate. `documents` is relative to the workspace unless absolute. `excludePatterns` uses the existing Gitignore-style matching. Hidden directories, build/cache directories and `.rag-go` are excluded from source scanning.
 
-Environment credentials take precedence over `.rag-go/credentials.json`. Workspace credentials are passed directly to providers without changing process environment. The store directory uses `0700`; credentials and JSON state use `0600`. Secrets stay out of configuration, indexes and status output.
+For a trusted endpoint, environment credentials take precedence over `.rag-go/credentials.json`; other endpoints receive only workspace credentials. Workspace credentials are passed directly to providers without changing process environment. The store directory uses `0700`; credentials and JSON state use `0600`. Secrets stay out of configuration, indexes and status output.
 
 Embedding supports Voyage and OpenAI-compatible `POST {baseUrl}/embeddings` returning `data[{index,embedding}]`. Optional reranking supports Voyage or generic HTTP `POST {baseUrl}/rerank` with `{model,query,documents,top_n}`, returning `results[{index,relevance_score}]`. `none` disables reranking.
 

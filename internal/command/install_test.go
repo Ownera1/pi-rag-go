@@ -166,10 +166,10 @@ func TestInstallRejectsBrokenCodexConfigAndFailedProbe(t *testing.T) {
 	if err := install(context.Background(), append(providerArgs(failing), "--agents", "none"), strings.NewReader(""), &out, &stderr, h); err == nil {
 		t.Fatal("failed probe accepted")
 	}
-	if _, _, err := loadGlobalConfig(); err != nil {
+	if _, _, err := workspace.GlobalConfig(); err != nil {
 		t.Fatal(err)
 	}
-	if _, installed, _ := loadGlobalConfig(); installed {
+	if _, installed, _ := workspace.GlobalConfig(); installed {
 		t.Fatal("failed probe saved configuration")
 	}
 }
