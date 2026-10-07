@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.2 (2026-10-07)
+
+- In a terminal, `rag install` and `rag init` ask with arrow-key menus, a masked key field and spinners for the embedding probe and each agent registration. `rag install` without `--agents` shows a checklist of agents with the detected ones ticked. Non-interactive runs and the JSON report are unchanged.
+
 ## v0.3.1 (2026-10-07)
 
 - `rag install`/`rag uninstall` also register `rag mcp` with Claude Desktop, Antigravity (IDE and `agy` CLI, `~/.gemini/config/mcp_config.json`) and pi (`~/.pi/agent/mcp.json`), editing only `mcpServers.rag-go`. `--agents` accepts `claude,codex,claude-desktop,antigravity,pi`.
