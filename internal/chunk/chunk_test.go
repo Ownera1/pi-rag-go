@@ -92,11 +92,14 @@ func TestMergeJoinsParagraphsWithinSectionAndPage(t *testing.T) {
 		{Text: "   "},
 		{Text: "next page", Section: &a, PageStart: &two, PageEnd: &two},
 		{Text: "next section", Section: &b, PageStart: &two, PageEnd: &two},
+		{Text: "$$x$$", Section: &b, PageStart: &two, PageEnd: &two, Kind: "equation"},
+		{Text: "$$y$$", Section: &b, PageStart: &two, PageEnd: &two, Kind: "equation"},
+		{Text: "after equations", Section: &b, PageStart: &two, PageEnd: &two},
 		{Text: "unpaged"},
 		{Text: "unpaged too"},
 	}
 	got := Merge(blocks)
-	want := []string{"first\n\nsecond", "next page", "next section", "unpaged\n\nunpaged too"}
+	want := []string{"first\n\nsecond", "next page", "next section", "$$x$$\n\n$$y$$", "after equations", "unpaged\n\nunpaged too"}
 	if len(got) != len(want) {
 		t.Fatalf("%+v", got)
 	}

@@ -8,11 +8,15 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/Ownera1/rag-go/internal/model"
+	"golang.org/x/net/html"
 )
+
+var htmlTag = regexp.MustCompile(`<[^>]*>`)
 
 func IsMinerUFile(path string) bool {
 	name := strings.ToLower(filepath.Base(path))
@@ -46,6 +50,37 @@ func jsonText(v any) string {
 	return ""
 }
 
+// figureText returns a figure, chart or table's caption, footnote and, for a
+// table, its cell text. content_list v1 keeps these on the item, v2 under
+// "content".
+// ponytail: table cells are flattened to words; row/column structure is lost.
+func figureText(item map[string]any, typ string) string {
+	src := item
+	if c, ok := item["content"].(map[string]any); ok {
+		src = c
+	}
+	parts := []string{}
+	add := func(v any) {
+		if list, ok := v.([]any); ok {
+			for _, x := range list {
+				parts = append(parts, jsonText(x))
+			}
+		} else if s, ok := v.(string); ok {
+			parts = append(parts, s)
+		}
+	}
+	add(src[typ+"_caption"])
+	if typ == "table" {
+		for _, key := range []string{"table_body", "html"} {
+			if s, ok := src[key].(string); ok {
+				add(html.UnescapeString(htmlTag.ReplaceAllString(s, " ")))
+			}
+		}
+	}
+	add(src[typ+"_footnote"])
+	return strings.Join(parts, "\n")
+}
+
 func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 	var root any
 	dec := json.NewDecoder(bytes.NewReader(b))
@@ -72,6 +107,7 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 		}
 		typ, _ := item["type"].(string)
 		value := ""
+		kind := ""
 		level := 0
 		content, _ := item["content"].(map[string]any)
 		switch typ {
@@ -127,7 +163,22 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 					}
 				}
 			}
+		case "image", "chart", "table":
+			// Pixels are not indexed; captions and table text are.
+			value = figureText(item, typ)
+		case "equation", "equation_interline", "interline_equation":
+			// Own chunks: LaTeX merged into prose dilutes its embedding.
+			kind = "equation"
+			value = jsonText(item["text"])
+			if content != nil {
+				if math := jsonText(content["math_content"]); math != "" {
+					value = "$$" + math + "$$"
+				}
+			}
 		default:
+			// Code, references and page furniture (header, footer,
+			// page_number, page_footnote) are skipped, as are types MinerU
+			// may add later.
 			return nil
 		}
 		value = normalize(value)
@@ -157,7 +208,7 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 				return nil
 			}
 		}
-		blocks = append(blocks, model.Block{Text: value, Section: section(path), PageStart: page, PageEnd: page})
+		blocks = append(blocks, model.Block{Text: value, Section: section(path), PageStart: page, PageEnd: page, Kind: kind})
 		return nil
 	}
 	var list func([]any, *int) error

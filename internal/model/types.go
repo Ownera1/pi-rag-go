@@ -9,6 +9,8 @@ type Block struct {
 	PageEnd   *int    `json:"pageEnd"`
 	LineStart *int    `json:"lineStart"`
 	LineEnd   *int    `json:"lineEnd"`
+	// Kind separates blocks Merge must not join, e.g. "equation" from prose.
+	Kind string `json:"kind,omitempty"`
 }
 
 type Document struct {
