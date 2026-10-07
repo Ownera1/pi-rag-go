@@ -331,3 +331,30 @@ func TestCancelledParsers(t *testing.T) {
 		}
 	}
 }
+
+func TestRagFixesCorrectPackageText(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "paper_content_list.json")
+	writeDocument(t, path, `[{"type":"text","text":"pilot symbol \\nu_l here","page_idx":0},{"type":"text","text":"junk","page_idx":0}]`)
+	before, err := Parse(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamp, _, _ := InputStamp(path)
+	writeDocument(t, filepath.Join(dir, FixesFile), "# OCR\n\\nu_l\t\\nu_1\r\njunk\t\n")
+	after, err := Parse(ctx, path)
+	if err != nil || joined(after.Blocks) != `pilot symbol \nu_1 here` || len(after.Blocks) != 1 {
+		t.Fatalf("blocks=%+v err=%v", after.Blocks, err)
+	}
+	if fp, _ := InputFingerprint(ctx, path); after.Hash == before.Hash || fp != after.Hash {
+		t.Fatalf("hash %s fingerprint %s before %s", after.Hash, fp, before.Hash)
+	}
+	if next, _, _ := InputStamp(path); next == stamp {
+		t.Fatal("stamp ignores fixes file")
+	}
+	writeDocument(t, filepath.Join(dir, FixesFile), "gone\tx\n")
+	if _, err := Parse(ctx, path); err == nil || !strings.Contains(err.Error(), "line 1") {
+		t.Fatalf("stale fix accepted: %v", err)
+	}
+}

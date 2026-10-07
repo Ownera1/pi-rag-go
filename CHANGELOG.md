@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.0 (2026-10-06)
+
+Existing v0.2 indexes report `rebuild required`; run `rag rebuild` once after upgrading.
+
+- Chunks are embedded as `title > section` followed by the body, preferring the linked Zotero title, so vectors carry document and section context. Stored content and display are unchanged.
+- The keyword index gains a heading column, so section names and Zotero titles are BM25/Chinese-searchable.
+- MinerU figure/chart/table captions and footnotes, table cell text and display equations (LaTeX) are indexed in their section. Equations stay in their own chunks instead of merging into prose.
+- A per-package `rag-fixes.tsv` of `wrong<TAB>right` pairs corrects OCR errors in parsed MinerU or manifest text without editing MinerU output. Editing it triggers reindexing; a pair that matches nothing fails the document with its line number.
+- MinerU Desktop folders (`<source file>-<uuid>`) without a manifest link automatically to the Zotero attachment with exactly that filename.
+- `scripts/ab-eval.sh` compares retrieval metrics between a git ref and the working tree.
+
 ## v0.2.0 (2026-10-06)
 
 - `rag install` saves user-wide embedding defaults and the API key under `~/.config/rag-go/` after verifying the endpoint, and registers one workspace-agnostic `rag mcp` with Claude Code (user scope) and Codex (`~/.codex/config.toml`, editing only the rag-go table). `rag uninstall [--purge]` reverses it.

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -375,12 +376,16 @@ func (d *DB) Match(ctx context.Context, docs []model.CatalogDocument, kind, id s
 		method := "explicit"
 		lock := true
 		if ref == nil {
-			method = "attachment_path"
+			column, value := "attachment_path", cleanPath(doc.SourcePath)
+			if value == "" {
+				column, value = "filename", convertedFrom(doc.Path)
+			}
+			method = "attachment_" + column
 			lock = false
 			rows, e := d.SQL.QueryContext(ctx, `SELECT a.item_key,a.parent_key FROM zotero_items a JOIN zotero_items p
 ON p.library_type=a.library_type AND p.library_id=a.library_id AND p.item_key=a.parent_key
 WHERE a.library_type=? AND a.library_id=? AND a.item_type='attachment' AND a.deleted=0 AND p.deleted=0
-AND a.attachment_path<>'' AND a.attachment_path=?`, kind, id, cleanPath(doc.SourcePath))
+AND a.`+column+`<>'' AND a.`+column+`=?`, kind, id, value)
 			if e != nil {
 				return r, e
 			}
@@ -448,6 +453,22 @@ AND a.attachment_path<>'' AND a.attachment_path=?`, kind, id, cleanPath(doc.Sour
 		}
 	}
 	return r, nil
+}
+
+// convertedSuffix is the "-<uuid>" MinerU Desktop appends to the source file
+// name when naming its output folder.
+var convertedSuffix = regexp.MustCompile(`-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// convertedFrom returns the source file name encoded in the nearest MinerU
+// output folder above path, e.g. "paper.pdf" for ".../paper.pdf-<uuid>/x.json".
+// ponytail: exact byte match; an NFC/NFD mismatch in accented names will not link.
+func convertedFrom(path string) string {
+	for dir := filepath.Dir(path); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		if name := filepath.Base(dir); convertedSuffix.MatchString(name) {
+			return convertedSuffix.ReplaceAllString(name, "")
+		}
+	}
+	return ""
 }
 
 func cleanPath(path string) string {

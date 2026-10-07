@@ -77,6 +77,8 @@ Every operation reloads configuration, state and the active database. Reads hold
 
 One document folder produces one canonical representation. Existing `rag-source.json` manifests take precedence; recognizable MinerU folders select one JSON representation and exclude Markdown, metadata and other companions. Ambiguous multi-paper MinerU directories fail with instructions to split them into separate folders. Ordinary files outside such packages remain independent documents. PDF and other unsupported assets are ignored during scanning.
 
+To correct OCR errors without editing MinerU output, put a `rag-fixes.tsv` in the package folder: one `wrong<TAB>right` pair per line (`#` starts a comment), applied in order to the parsed text. Copy the wrong text from query results; LaTeX backslashes are written as-is. A pair that matches nothing fails the document with its line number, so typos and fixes made stale by a MinerU rerun surface. Editing the file triggers reindexing.
+
 An optional source manifest uses the existing format:
 
 ```json
@@ -110,7 +112,7 @@ Read-only stdio and all HTTP servers expose only query/status/list, reject write
 
 ## Configuration and retrieval
 
-Optional Zotero Local API integration uses a persistent `catalog.db`, independent of rebuildable index generations. Full metadata snapshots, exact attachment/unique DOI matches, locked manual links, portable Manifest references, and year/tag/collection prefilters are available through `rag zotero` and `rag query`. Metadata updates do not re-embed body content. See [Zotero setup, commands and verification](ZOTERO.md).
+Optional Zotero Local API integration uses a persistent `catalog.db`, independent of rebuildable index generations. Full metadata snapshots, exact attachment path or filename (MinerU Desktop `<file>-<uuid>` folders)/unique DOI matches, locked manual links, portable Manifest references, and year/tag/collection prefilters are available through `rag zotero` and `rag query`. Metadata updates do not re-embed body content. See [Zotero setup, commands and verification](ZOTERO.md).
 
 See [config.example.json](config.example.json). Configuration and indexing state are separate. `documents` is relative to the workspace unless absolute. `excludePatterns` uses the existing Gitignore-style matching. Hidden directories, build/cache directories and `.rag-go` are excluded from source scanning.
 
@@ -131,9 +133,9 @@ export CGO_CFLAGS="$(scripts/cgo-flags.sh)"
 go test -race -tags sqlite_fts5 ./...
 go vet -tags sqlite_fts5 ./...
 go build -tags sqlite_fts5 -o bin/rag ./cmd/rag
-./scripts/package.sh v0.2.0-local dist
+./scripts/package.sh v0.3.0-local dist
 mkdir -p /tmp/rag-go-extracted
-tar -xzf dist/rag-go_v0.2.0-local_$(go env GOOS)_$(go env GOARCH).tar.gz -C /tmp/rag-go-extracted
+tar -xzf dist/rag-go_v0.3.0-local_$(go env GOOS)_$(go env GOARCH).tar.gz -C /tmp/rag-go-extracted
 python3 scripts/smoke-release.py /tmp/rag-go-extracted
 python3 scripts/test-release.py
 ```
