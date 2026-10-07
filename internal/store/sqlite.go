@@ -100,12 +100,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     chunk_index INTEGER NOT NULL DEFAULT 0
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-    chunk_content, file_path, content_rowid=rowid
+    chunk_content, file_path, heading, content_rowid=rowid
 );
-CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
-    INSERT INTO chunks_fts(rowid, chunk_content, file_path)
-    VALUES(new.rowid, new.chunk_content, new.file_path);
-END;
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_cjk USING fts5(search_text);
 CREATE TRIGGER IF NOT EXISTS chunks_cjk_ad AFTER DELETE ON chunks BEGIN
     DELETE FROM chunks_cjk WHERE rowid=old.rowid;
@@ -356,6 +352,11 @@ INSERT INTO chunks (
 		return e
 	}
 	defer insertChunk.Close()
+	insertFTS, e := tx.PrepareContext(ctx, "INSERT INTO chunks_fts(rowid,chunk_content,file_path,heading) VALUES(?,?,?,?)")
+	if e != nil {
+		return e
+	}
+	defer insertFTS.Close()
 	insertHan, e := tx.PrepareContext(ctx, "INSERT INTO chunks_cjk(rowid,search_text) VALUES(?,?)")
 	if e != nil {
 		return e
@@ -378,7 +379,10 @@ INSERT INTO chunks (
 		if err != nil {
 			return err
 		}
-		if _, err = insertHan.ExecContext(ctx, rowid, searchtext.Indexed(c.Content+" "+doc.Path)); err != nil {
+		if _, err = insertFTS.ExecContext(ctx, rowid, c.Content, doc.Path, c.Heading); err != nil {
+			return err
+		}
+		if _, err = insertHan.ExecContext(ctx, rowid, searchtext.Indexed(c.Content+" "+doc.Path+" "+c.Heading)); err != nil {
 			return err
 		}
 		if _, err = insertVector.ExecContext(ctx, rowid, vecBytes(vectors[i])); err != nil {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Ownera1/rag-go/internal/catalog"
@@ -173,5 +174,56 @@ func TestMetadataFilterValidationPrecedesAutomaticIndexing(t *testing.T) {
 	}
 	if p.calls.Load() != 0 {
 		t.Fatal("invalid filter triggered embedding")
+	}
+}
+
+type recordingEmbedding struct {
+	fakeEmbedding
+	mu    sync.Mutex
+	texts []string
+}
+
+func (r *recordingEmbedding) EmbedDocuments(ctx context.Context, in []string) ([][]float32, error) {
+	r.mu.Lock()
+	r.texts = append(r.texts, in...)
+	r.mu.Unlock()
+	return r.fakeEmbedding.EmbedDocuments(ctx, in)
+}
+
+func TestHeadingPrefersZoteroTitleAndSection(t *testing.T) {
+	ctx := context.Background()
+	p := &recordingEmbedding{}
+	c := openTest(t, t.TempDir(), p)
+	defer c.Close()
+	writePackage(t, c, "second", "b", "", "https://doi.org/10.1234/SECOND")
+	sourceFile(t, docPath(c, "notes.md"), []byte("# Guide\n\n## Setup\n\nInstall the tool.\n"))
+	applyFixtureCatalog(t, c, false)
+	if _, err := c.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	p.texts = nil
+	// The DOI link exists after the first sync; a rebuild embeds its title.
+	if _, err := c.Rebuild(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{
+		"Selected paper\n\nsignal 信道 estimation evidence second":    false,
+		"notes.md > Guide / Setup\n\n## Setup\n\nInstall the tool.": false,
+	}
+	for _, text := range p.texts {
+		if _, ok := want[text]; ok {
+			want[text] = true
+		}
+	}
+	for text, seen := range want {
+		if !seen {
+			t.Fatalf("missing embedding text %q in %q", text, p.texts)
+		}
+	}
+	// "Selected" occurs only in the Zotero title, so keyword search must
+	// reach it through the indexed heading.
+	q, err := c.Query(ctx, "Selected", QueryOptions{Mode: "bm25", DisableSync: true})
+	if err != nil || len(q.Hits) != 1 || !strings.Contains(q.Hits[0].Chunk.Content, "evidence second") {
+		t.Fatalf("heading not keyword-searchable: %+v %v", q, err)
 	}
 }

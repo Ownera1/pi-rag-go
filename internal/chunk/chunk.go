@@ -59,7 +59,7 @@ func Merge(blocks []model.Block) []model.Block {
 			if last.LineStart != nil && last.LineEnd != nil && b.LineStart != nil && b.LineEnd != nil {
 				lines = *b.LineStart == *last.LineEnd+2 && strings.Count(last.Text, "\n") == *last.LineEnd-*last.LineStart
 			}
-			if lines && sameString(last.Section, b.Section) && sameInt(last.PageStart, b.PageStart) && sameInt(last.PageEnd, b.PageEnd) {
+			if lines && last.Kind == b.Kind && sameString(last.Section, b.Section) && sameInt(last.PageStart, b.PageStart) && sameInt(last.PageEnd, b.PageEnd) {
 				last.Text += "\n\n" + b.Text
 				last.LineEnd = b.LineEnd
 				continue

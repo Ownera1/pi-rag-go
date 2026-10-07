@@ -132,7 +132,11 @@ func TestMinerUContractsAndPhysicalPages(t *testing.T) {
 		name, source, text string
 		page               int
 	}{
-		{"v1", `[{"type":"text","text":"Methods","text_level":1,"page_idx":2},{"type":"text","text":"Signal evidence","page_idx":2},{"type":"image","text":"LEAK","page_idx":2}]`, "Signal evidence", 3},
+		{"v1", `[{"type":"text","text":"Methods","text_level":1,"page_idx":2},{"type":"text","text":"Signal evidence","page_idx":2},{"type":"image","text":"LEAK","page_idx":2},` +
+			`{"type":"code","code_body":"LEAK","page_idx":2},` +
+			`{"type":"ref_text","text":"LEAK","page_idx":2},{"type":"header","text":"LEAK","page_idx":2},` +
+			`{"type":"footer","text":"LEAK","page_idx":2},{"type":"page_number","text":"LEAK","page_idx":2},` +
+			`{"type":"page_footnote","text":"LEAK","page_idx":2}]`, "Signal evidence", 3},
 		{"v2", `[[{"type":"title","content":{"title_content":[{"type":"text","content":"Methods"}],"level":1}},{"type":"paragraph","content":{"paragraph_content":[{"type":"text","content":"Signal evidence"},{"type":"inline_equation","content":"LEAK"}]}},{"type":"list","content":{"list_type":"reference_list","list_items":[{"item_content":"LEAK"}]}}]]`, "Signal evidence", 0},
 		{"middle", `{"schema":"docvortex.middle","schema_version":"2.0","pages":[{"page_idx":7,"blocks":[{"type":"text","content":[{"type":"text","content":"Signal evidence"}]}]}]}`, "Signal evidence", 8},
 		{"structured", `{"pages":[{"page_idx":7,"blocks":[{"type":"text","content":"Signal evidence"}]}]}`, "Signal evidence", 8},
@@ -162,6 +166,43 @@ func TestMinerUContractsAndPhysicalPages(t *testing.T) {
 		if _, err := ParseMinerU(context.Background(), []byte(bad)); err == nil {
 			t.Fatalf("accepted bad MinerU payload %s", bad)
 		}
+	}
+}
+
+func TestMinerUIndexesCaptionsTablesAndEquations(t *testing.T) {
+	for name, source := range map[string]string{
+		"v1": `[{"type":"text","text":"Results","text_level":1,"page_idx":0},` +
+			`{"type":"image","img_path":"images/a.jpg","image_caption":["Fig. 1. Uplink layout."],"image_footnote":["Drawn to scale."],"page_idx":0},` +
+			`{"type":"chart","chart_caption":["Fig. 2. MSE versus SINR."],"chart_footnote":[],"page_idx":0},` +
+			`{"type":"table","table_caption":["TABLE I Parameters"],"table_body":"<table><tr><td>Carrier &amp; band</td><td>3.5 GHz</td></tr></table>","page_idx":0},` +
+			`{"type":"equation","text":"$$y = Hx + n$$","text_format":"latex","page_idx":0}]`,
+		"v2": `[[{"type":"title","content":{"title_content":[{"type":"text","content":"Results"}],"level":1}},` +
+			`{"type":"image","content":{"image_source":{"path":"images/a.jpg"},"image_caption":[{"type":"text","content":"Fig. 1. Uplink layout."}],"image_footnote":[{"type":"text","content":"Drawn to scale."}]}},` +
+			`{"type":"chart","content":{"chart_caption":[{"type":"text","content":"Fig. 2. MSE versus SINR."}],"chart_footnote":[]}},` +
+			`{"type":"table","content":{"table_caption":[{"type":"text","content":"TABLE I Parameters"}],"html":"<table><tr><td>Carrier &amp; band</td><td>3.5 GHz</td></tr></table>"}},` +
+			`{"type":"equation_interline","content":{"math_content":"y = Hx + n","math_type":"latex"}}]]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			blocks, err := ParseMinerU(context.Background(), []byte(source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := joined(blocks)
+			for _, want := range []string{"Fig. 1. Uplink layout.", "Drawn to scale.", "Fig. 2. MSE versus SINR.",
+				"TABLE I Parameters", "Carrier & band 3.5 GHz", "$$y = Hx + n$$"} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("missing %q in %q", want, text)
+				}
+			}
+			if strings.Contains(text, "<td>") || strings.Contains(text, "images/") {
+				t.Fatalf("markup or image path leaked: %q", text)
+			}
+			for _, b := range blocks {
+				if b.Section == nil || *b.Section != "Results" {
+					t.Fatalf("figure lost its section: %+v", b)
+				}
+			}
+		})
 	}
 }
 

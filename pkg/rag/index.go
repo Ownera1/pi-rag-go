@@ -158,6 +158,11 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 	if len(paths) == 0 {
 		return result
 	}
+	titles, e := c.zoteroTitles(ctx)
+	if e != nil {
+		addFailure(&result, c.docs, "catalog", e)
+		return result
+	}
 	// Index previous paths once so each document's replacement lookup is a
 	// sorted prefix range or an ancestor walk, not a scan of every path.
 	sort.Strings(previous)
@@ -259,6 +264,10 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 					done <- work{path: p, stage: "embed", err: errors.New("embedding provider unavailable")}
 					continue
 				}
+				title := doc.Title
+				if t := titles[doc.DocumentKey]; t != "" {
+					title = t
+				}
 				texts := make([]string, len(chunks))
 				for i := range chunks {
 					chunks[i].ID = doc.ID + "-" + fmt.Sprint(chunks[i].ChunkIndex)
@@ -269,7 +278,11 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 					chunks[i].Title = doc.Title
 					chunks[i].Format = doc.Format
 					chunks[i].ParserVersion = doc.ParserVersion
+					chunks[i].Heading = heading(title, chunks[i].Section)
 					texts[i] = chunks[i].Content
+					if chunks[i].Heading != "" {
+						texts[i] = chunks[i].Heading + "\n\n" + texts[i]
+					}
 				}
 				select {
 				case embedSlots <- struct{}{}:
@@ -317,6 +330,21 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 		result.Chunks += len(w.chunks)
 	}
 	return result
+}
+
+// heading gives a chunk its document title and section path, prefixed to the
+// embedding input and indexed for keyword search, since chunk text alone
+// lacks that context. Content stays bare.
+// ponytail: a Zotero link made after indexing reaches the index only on rebuild.
+func heading(title string, section *string) string {
+	head := []string{}
+	if title != "" {
+		head = append(head, title)
+	}
+	if section != nil && *section != "" {
+		head = append(head, *section)
+	}
+	return strings.Join(head, " > ")
 }
 
 func randomID() string {

@@ -72,6 +72,23 @@ func (s *session) openCatalog(write bool) (*catalog.DB, error) {
 	return db, nil
 }
 
+// zoteroTitles uses its own read-only handle: openCatalog caches its first
+// mode, and indexing is followed by a read-write reconcile.
+func (s *session) zoteroTitles(ctx context.Context) (map[string]string, error) {
+	path := filepath.Join(s.root, "catalog.db")
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return map[string]string{}, nil
+	} else if err != nil {
+		return nil, err
+	}
+	db, err := catalog.Open(path, true)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return db.Titles(ctx)
+}
+
 func (s *session) zoteroConfig() ZoteroConfig {
 	if s.cfg.Zotero != nil {
 		return s.cfg.Zotero.Defaults()
