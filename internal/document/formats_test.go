@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,6 +37,27 @@ func TestMarkdownASTHeadingsAndSourceLines(t *testing.T) {
 		if _, err := markdown(context.Background(), []byte(source)); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestMarkdownPaperFilters(t *testing.T) {
+	source := "# Model\n\nThe signal is\n\n$$\n\\mathbf{Y}=\\mathbf{H}\\mathbf{X}\n$$\n\n$$ \\nu_l $$\n\n![Fig. 2 system](images/a.png)\n<table><tr><td>SNR &amp; BER</td></tr></table>\nafter\n\n# References\n\n[1] CITE_LEAK\n\n## Sub\n\nSUB_LEAK\n\n# Appendix\n\nproof\n"
+	blocks, err := markdown(context.Background(), []byte(source))
+	if err != nil || len(blocks) != 4 {
+		t.Fatalf("blocks=%+v err=%v", blocks, err)
+	}
+	prose, eq, tail, app := blocks[0], blocks[1], blocks[2], blocks[3]
+	if prose.Kind != "" || prose.Text != "# Model\n\nThe signal is" || *prose.LineEnd != 3 {
+		t.Fatalf("prose: %+v", prose)
+	}
+	if eq.Kind != "equation" || *eq.LineStart != 5 || *eq.LineEnd != 9 || !strings.HasSuffix(eq.Text, "$$ \\nu_l $$") {
+		t.Fatalf("equation: %+v", eq)
+	}
+	if tail.Kind != "" || tail.Text != "Fig. 2 system\nSNR & BER\nafter" || *tail.LineStart != 11 || *tail.LineEnd != 13 {
+		t.Fatalf("figure/table: %+v", tail)
+	}
+	if *app.Section != "Appendix" || strings.Contains(joined(blocks), "LEAK") {
+		t.Fatalf("references not skipped: %+v", blocks)
 	}
 }
 
@@ -272,6 +294,135 @@ func TestManifestIdentityChangeDetectionAndBoundary(t *testing.T) {
 		if _, err := Parse(context.Background(), manifest); err == nil {
 			t.Fatalf("accepted manifest content path %q", path)
 		}
+	}
+}
+
+func TestMarkdownPagesFromMinerU(t *testing.T) {
+	dir := t.TempDir()
+	long := strings.Repeat("Pilot sequences are reused across neighbouring cells, which creates contamination. ", 4)
+	items := []map[string]any{
+		{"type": "text", "text": "Model", "text_level": 1, "page_idx": 0},
+		{"type": "text", "text": "The base station serves several users over a shared wideband channel.", "page_idx": 0},
+		{"type": "text", "text": "Interference from neighbouring cells dominates the received signal at", "page_idx": 0},
+		{"type": "text", "text": "the cell edge, so the estimator must cancel it before decoding.", "page_idx": 1},
+		{"type": "text", "text": long, "page_idx": 1},
+		{"type": "text", "text": "Simulation results confirm the gain of interference cancellation over baselines.", "page_idx": 2},
+	}
+	b, err := json.Marshal(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeDocument(t, filepath.Join(dir, "paper_content_list.json"), string(b))
+	// The fourth paragraph is not in the export but starts like the last
+	// one; the third was edited by hand and gained a stray NUL.
+	writeDocument(t, filepath.Join(dir, "full.md"), "# Model\n\nThe base station serves several users over a shared wideband channel.\n\n"+
+		"Interference from neighbouring cells dominates the received signal at the cell edge, so the estimator must cancel it before decoding.\n\n"+
+		"Simulation results confirm.\n\n"+strings.Replace(long, "contamination", "pilot\x00 contamination", 1)+"\n\n"+
+		"Simulation results confirm the gain of interference cancellation over baselines.\n")
+	manifest := filepath.Join(dir, "rag-source.json")
+	writeDocument(t, manifest, `{"version":1,"format":"markdown","contentPath":"full.md","pagesFrom":"paper_content_list.json"}`)
+	d, err := Parse(context.Background(), manifest)
+	if err != nil || len(d.Blocks) != 6 {
+		t.Fatalf("blocks=%+v err=%v", d.Blocks, err)
+	}
+	want := [][3]int{{1, 1, 1}, {3, 1, 1}, {5, 1, 2}, {7, 2, 2}, {9, 2, 2}, {11, 3, 3}}
+	for i, b := range d.Blocks {
+		if *b.LineStart != want[i][0] || *b.LineEnd != want[i][0] || *b.PageStart != want[i][1] || *b.PageEnd != want[i][2] {
+			t.Fatalf("block %d: lines %d-%d pages %d-%d, want %v", i, *b.LineStart, *b.LineEnd, *b.PageStart, *b.PageEnd, want[i])
+		}
+	}
+	before, err := InputFingerprint(context.Background(), manifest)
+	if err != nil || before != d.Hash {
+		t.Fatalf("fingerprint %q hash %q err %v", before, d.Hash, err)
+	}
+	writeDocument(t, filepath.Join(dir, "paper_content_list.json"), `[{"type":"text","text":"An unrelated paper about protein folding and molecular dynamics.","page_idx":0}]`)
+	if after, _ := InputFingerprint(context.Background(), manifest); after == before {
+		t.Fatal("page export change not detected")
+	}
+	if _, err = Parse(context.Background(), manifest); err == nil || !strings.Contains(err.Error(), "matches 0 of") {
+		t.Fatalf("another document's export was accepted: %v", err)
+	}
+	writeDocument(t, manifest, `{"version":1,"format":"text","contentPath":"full.md","pagesFrom":"paper_content_list.json"}`)
+	if _, err = Parse(context.Background(), manifest); err == nil {
+		t.Fatal("pagesFrom accepted for a non-Markdown format")
+	}
+}
+
+func TestLayoutCrossPagePages(t *testing.T) {
+	// Paper titles can contain glob metacharacters.
+	dir := filepath.Join(t.TempDir(), "Paper [2025]")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p1 := "The base station serves several users over a shared wideband channel."
+	p2a := "Interference from neighbouring cells dominates the received signal"
+	p2b := "at the cell edge, so the estimator must cancel it before decoding."
+	algo := "Algorithm 1 update every message until convergence"
+	p3a, p3b := "Pilot sequences are reused across neighbouring cells with channel", "so contamination grows with the number of reused pilot sequences."
+	// MinerU keeps a paragraph continuing onto page 2 whole on page 1;
+	// layout.json marks the moved spans cross_page.
+	content, _ := json.Marshal([]map[string]any{
+		{"type": "text", "text": p1, "page_idx": 0},
+		{"type": "text", "text": p2a + " " + p2b, "page_idx": 0},
+		{"type": "text", "text": p3a + " $\\mathbf{H}$ " + p3b, "page_idx": 1},
+	})
+	span := func(text string, extra ...any) map[string]any {
+		s := map[string]any{"type": "text", "content": text}
+		for i := 0; i < len(extra); i += 2 {
+			s[extra[i].(string)] = extra[i+1]
+		}
+		return s
+	}
+	lines := func(spans ...map[string]any) []any {
+		out := []any{}
+		for _, s := range spans {
+			out = append(out, map[string]any{"spans": []any{s}})
+		}
+		return out
+	}
+	layout, _ := json.Marshal(map[string]any{"pdf_info": []any{
+		map[string]any{"page_idx": 0, "para_blocks": []any{
+			map[string]any{"type": "text", "lines": lines(span(p1))},
+			map[string]any{"type": "text", "lines": lines(span(p2a), span(p2b, "cross_page", true))},
+		}, "discarded_blocks": []any{map[string]any{"type": "header", "lines": lines(span("JOURNAL HEADER LEAK"))}}},
+		map[string]any{"page_idx": 1, "para_blocks": []any{
+			map[string]any{"type": "text", "lines": []any{}, "lines_deleted": true},
+			map[string]any{"type": "code", "blocks": []any{map[string]any{"type": "code_body", "lines": lines(span(algo))}}},
+			map[string]any{"type": "text", "lines": []any{map[string]any{"spans": []any{span(p3a), span("\\mathbf{H}", "type", "inline_equation"), span(p3b)}}}},
+		}},
+	}})
+	list := filepath.Join(dir, "paper_content_list.json")
+	writeDocument(t, list, string(content))
+	pages := func(blocks []model.Block) [][2]int {
+		out := [][2]int{}
+		for _, b := range blocks {
+			out = append(out, [2]int{*b.PageStart, *b.PageEnd})
+		}
+		return out
+	}
+	d, err := Parse(context.Background(), list)
+	if err != nil || fmt.Sprint(pages(d.Blocks)) != "[[1 1] [1 1] [2 2]]" {
+		t.Fatalf("without layout.json: %v err=%v", pages(d.Blocks), err)
+	}
+	writeDocument(t, filepath.Join(dir, "layout.json"), string(layout))
+	d, err = Parse(context.Background(), list)
+	if err != nil || fmt.Sprint(pages(d.Blocks)) != "[[1 1] [1 2] [2 2]]" {
+		t.Fatalf("content list repaged by layout.json: %v err=%v", pages(d.Blocks), err)
+	}
+	if fp, _ := InputFingerprint(context.Background(), list); fp != d.Hash {
+		t.Fatal("layout.json is not part of the input fingerprint")
+	}
+	writeDocument(t, filepath.Join(dir, "full.md"), p1+"\n\n"+p2a+" "+p2b+"\n\n"+algo+"\n\n"+p3a+" $\\mathbf{H}$ "+p3b+"\n")
+	manifest := filepath.Join(dir, "rag-source.json")
+	writeDocument(t, manifest, `{"version":1,"format":"markdown","contentPath":"full.md","pagesFrom":"layout.json"}`)
+	d, err = Parse(context.Background(), manifest)
+	if err != nil || fmt.Sprint(pages(d.Blocks)) != "[[1 1] [1 2] [2 2] [2 2]]" {
+		t.Fatalf("Markdown paged by layout.json: %v err=%v", pages(d.Blocks), err)
+	}
+	// A layout.json from another run leaves the content list's own pages.
+	writeDocument(t, filepath.Join(dir, "layout.json"), `{"pdf_info":[{"page_idx":0,"para_blocks":[{"type":"text","lines":[{"spans":[{"type":"text","content":"An unrelated paper about protein folding and molecular dynamics."}]}]}]}]}`)
+	if d, err = Parse(context.Background(), list); err != nil || fmt.Sprint(pages(d.Blocks)) != "[[1 1] [1 1] [2 2]]" {
+		t.Fatalf("mismatched layout.json: %v err=%v", pages(d.Blocks), err)
 	}
 }
 

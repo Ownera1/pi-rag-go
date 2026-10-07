@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.0 (2026-10-07)
+
+Existing v0.3 indexes report `rebuild required`; run `rag rebuild` once after upgrading.
+
+- MinerU page numbers: a paragraph that continues onto the next page now spans both pages. MinerU content lists file it under its first page; a `layout.json` (MinerU Desktop) or `*_middle.json` beside the export marks the moved lines and is now read automatically. Checked against the PDF text layer on six papers, correct chunk page ranges rose from 87.7% to 98.7%.
+- Hand-editable Markdown that keeps page numbers: a `"format": "markdown"` manifest may add `"pagesFrom": "layout.json"` (or a content list). Each paragraph of MinerU's `full.md` is located in that export by its text and takes its pages, so hand corrections keep them. A paragraph it cannot find spans its neighbours' pages; an export matching under 70% of paragraphs fails the document.
+- Markdown chunking for papers: `$$` display equations get their own chunks, image links are reduced to their alt text and one-line HTML tables to their cell text, and References/Bibliography/参考文献 sections are skipped.
+- A stray NUL byte in Markdown, an OCR artefact, no longer rejects the whole file.
+
 ## v0.3.4 (2026-10-07)
 
 - Security: environment variables and user-wide credentials are sent only to Voyage's default endpoint or the one `rag install` recorded. A workspace config can no longer redirect them, or any other environment variable, to its own `baseUrl`; other endpoints use the workspace's own `credentials.json`, which `rag init` fills. A workspace on another endpoint that relied on an exported key needs `rag init` once in that workspace.

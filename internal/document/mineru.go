@@ -202,11 +202,8 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 				path = append(path, title)
 			}
 		}
-		for _, title := range path {
-			lower := strings.ToLower(title)
-			if lower == "references" || lower == "bibliography" || lower == "参考文献" {
-				return nil
-			}
+		if inReferences(path) {
+			return nil
 		}
 		blocks = append(blocks, model.Block{Text: value, Section: section(path), PageStart: page, PageEnd: page, Kind: kind})
 		return nil

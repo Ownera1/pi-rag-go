@@ -22,7 +22,7 @@ import (
 	"github.com/Ownera1/rag-go/internal/workspace"
 )
 
-const ParserVersion = "document-blocks-v4"
+const ParserVersion = "document-blocks-v5"
 const MaxDocumentBytes = 64 << 20
 
 type Manifest struct {
@@ -34,6 +34,9 @@ type Manifest struct {
 	SourcePath  string                 `json:"sourcePath,omitempty"`
 	SourceHash  string                 `json:"sourceHash,omitempty"`
 	Title       string                 `json:"title,omitempty"`
+	// PagesFrom names a MinerU JSON export of the same document whose page
+	// numbers are given to Markdown content.
+	PagesFrom string `json:"pagesFrom,omitempty"`
 }
 
 func readFile(path string) ([]byte, error) {
@@ -68,11 +71,21 @@ func InputFingerprint(ctx context.Context, path string) (string, error) {
 		if err = json.Unmarshal(b, &m); err != nil {
 			return hash, err
 		}
-		content, err := localContent(filepath.Dir(path), m.ContentPath)
+		files, err := manifestInputs(filepath.Dir(path), m)
 		if err != nil {
 			return hash, err
 		}
-		data, err := readFile(content)
+		parts := []string{string(b)}
+		for _, f := range files {
+			data, err := readFile(f)
+			if err != nil {
+				return hash, err
+			}
+			parts = append(parts, string(data))
+		}
+		hash = ShortHash(strings.Join(parts, "\x00"))
+	} else if src := minerUPages(path); src != "" {
+		data, err := readFile(src)
 		if err != nil {
 			return hash, err
 		}
@@ -98,11 +111,13 @@ func InputStamp(path string) (string, time.Time, error) {
 		if err = json.Unmarshal(b, &m); err != nil {
 			return "", time.Time{}, err
 		}
-		content, err := localContent(filepath.Dir(path), m.ContentPath)
+		inputs, err := manifestInputs(filepath.Dir(path), m)
 		if err != nil {
 			return "", time.Time{}, err
 		}
-		files = append(files, content)
+		files = append(files, inputs...)
+	} else if src := minerUPages(path); src != "" {
+		files = append(files, src)
 	}
 	if hasFixes(path) {
 		files = append(files, filepath.Join(filepath.Dir(path), FixesFile))
@@ -235,15 +250,26 @@ func parse(ctx context.Context, path string) (model.Document, error) {
 				return d, err
 			}
 		}
-		content, err := localContent(filepath.Dir(path), m.ContentPath)
+		if m.PagesFrom != "" && m.Format != "markdown" {
+			return d, errors.New("pagesFrom requires format markdown")
+		}
+		files, err := manifestInputs(filepath.Dir(path), m)
 		if err != nil {
 			return d, err
 		}
-		data, err := readFile(content)
+		data, err := readFile(files[0])
 		if err != nil {
 			return d, err
 		}
 		d.Hash = ShortHash(string(b) + "\x00" + string(data))
+		var pages []byte
+		if len(files) > 1 {
+			if pages, err = readFile(files[1]); err != nil {
+				return d, err
+			}
+			d.Hash = ShortHash(string(b) + "\x00" + string(data) + "\x00" + string(pages))
+			d.Size += int64(len(pages))
+		}
 		d.DocumentKey = contentKey(data)
 		if key := sourceKey(m.SourceHash); key != "" {
 			d.DocumentKey = key
@@ -259,7 +285,15 @@ func parse(ctx context.Context, path string) (model.Document, error) {
 			d.Title = m.Title
 		}
 		d.Format = m.Format
-		d.Blocks, err = parseBytes(ctx, content, data, m.Format)
+		d.Blocks, err = parseBytes(ctx, files[0], data, m.Format)
+		if err != nil || pages == nil {
+			return d, err
+		}
+		ref, err := pageRef(ctx, pages)
+		if err != nil {
+			return d, fmt.Errorf("pagesFrom: %w", err)
+		}
+		d.Blocks, err = withPages(d.Blocks, ref)
 		return d, err
 	}
 	d.Format = detectFormat(path, b)
@@ -267,6 +301,15 @@ func parse(ctx context.Context, path string) (model.Document, error) {
 		d.Title = filepath.Base(filepath.Dir(path))
 	}
 	d.Blocks, err = parseBytes(ctx, path, b, d.Format)
+	if src := minerUPages(path); err == nil && src != "" {
+		middle, err := readFile(src)
+		if err != nil {
+			return d, err
+		}
+		d.Hash = ShortHash(string(b) + "\x00" + string(middle))
+		d.Blocks, err = repage(ctx, d.Blocks, middle)
+		return d, err
+	}
 	return d, err
 }
 
@@ -313,6 +356,17 @@ func WriteZoteroReference(path string, ref model.ZoteroReference) error {
 	}
 	m.Zotero = &ref
 	return workspace.AtomicJSON(path, m)
+}
+
+// manifestInputs returns the manifest's content file, followed by its page
+// source when it names one.
+func manifestInputs(dir string, m Manifest) ([]string, error) {
+	content, err := localContent(dir, m.ContentPath)
+	if err != nil || m.PagesFrom == "" {
+		return []string{content}, err
+	}
+	pages, err := localContent(dir, m.PagesFrom)
+	return []string{content, pages}, err
 }
 
 func localContent(root, relative string) (string, error) {
@@ -382,6 +436,10 @@ func detectFormat(path string, b []byte) string {
 func parseBytes(ctx context.Context, path string, b []byte, format string) ([]model.Block, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if format == "markdown" {
+		// OCR output can contain a stray NUL; it does not make the file binary.
+		b = bytes.ReplaceAll(b, []byte{0}, nil)
 	}
 	if format != "docx" && format != "pdf" && (!utf8.Valid(b) || bytes.IndexByte(b, 0) >= 0) {
 		return nil, errors.New("input is not UTF-8 text")

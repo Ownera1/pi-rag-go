@@ -77,7 +77,7 @@ my-project/
 
 | 输入 | 正文内容 | 位置依据 |
 | --- | --- | --- |
-| Markdown / MDX | CommonMark 标题、段落和代码 | Markdown 行号 |
+| Markdown / MDX | CommonMark 标题、段落和代码；`$$` 行间公式单独成块；图片链接只保留 alt 文字，单行 HTML 表格只保留单元格文字；跳过 References/Bibliography/参考文献 章节 | Markdown 行号 |
 | TEI XML | 摘要、正文和附录，排除图表、公式、参考文献等子树 | 明确的 GROBID 坐标提供物理 PDF 页码 |
 | JATS XML | 摘要及嵌套正文章节 | 页码未知 |
 | MinerU JSON | 支持的正文、标题和列表导出 | 将显式 `page_idx` 从零基转成一基页码 |
@@ -102,7 +102,7 @@ my-project/
 }
 ```
 
-`contentPath` 在 symlink 解析后仍须位于文档包内。`sourcePath` 只用于来源归属，rag-go 不解析或要求原始 PDF 存在。Markdown 本身不能恢复 PDF 页码；未知位置保持为空。当前检索范围是论文正文，公式、图像、图表关系检索不在范围内。解析输入上限为 64 MiB，超限的受支持文件会明确报错。
+`contentPath` 在 symlink 解析后仍须位于文档包内。`sourcePath` 只用于来源归属，rag-go 不解析或要求原始 PDF 存在。Markdown 本身不能恢复 PDF 页码；如需手工修改 MinerU 的 `full.md` 又保留页码，在 MinerU 文件夹的 `"format": "markdown"` manifest 中加入 `"pagesFrom": "layout.json"`（或某个 `*_content_list.json`）。每个 Markdown 段落按文字在该导出中定位并取其页码，手工修改不影响页码；导出中没有的文字沿用前后段落的页码；匹配段落不足 70% 时该文档解析失败。MinerU 会把延续到下一页的段落整段记在起始页；`layout.json`（MinerU Desktop）或 `*_middle.json` 标记了被挪动的行，用它时这类段落的页码范围覆盖两页。直接按 content list 索引的 MinerU 文件夹，若旁边有 `layout.json` 或 `*_middle.json`，也会同样修正页码。未知位置保持为空。当前检索范围是论文正文，公式、图像、图表关系检索不在范围内。解析输入上限为 64 MiB，超限的受支持文件会明确报错。
 
 ## Zotero metadata
 
