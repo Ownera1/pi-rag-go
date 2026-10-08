@@ -200,9 +200,13 @@ func TestDynamicServerResolvesWorkspacePerCall(t *testing.T) {
 	if root, r := statusRoot(t, ctx, session, map[string]any{"workspace": b}); root != b {
 		t.Fatalf("second workspace: %q %+v", root, r)
 	}
+	// The server's working directory is inside b, but a call that omits the
+	// workspace or passes a relative one must not silently search b.
 	t.Chdir(filepath.Join(b, "documents"))
-	if root, r := statusRoot(t, ctx, session, map[string]any{}); root != b {
-		t.Fatalf("working directory discovery: %q %+v", root, r)
+	for _, args := range []map[string]any{{}, {"workspace": "."}} {
+		if _, r := statusRoot(t, ctx, session, args); r == nil || !r.IsError {
+			t.Fatalf("served the launch directory for %v", args)
+		}
 	}
 }
 
@@ -222,5 +226,9 @@ func TestFixedServerRejectsOtherWorkspaces(t *testing.T) {
 	}
 	if _, r := statusRoot(t, ctx, session, map[string]any{"workspace": other.WorkspaceDir()}); r == nil || !r.IsError {
 		t.Fatal("pinned server served another workspace")
+	}
+	t.Chdir(core.WorkspaceDir())
+	if _, r := statusRoot(t, ctx, session, map[string]any{"workspace": "."}); r == nil || !r.IsError {
+		t.Fatal("pinned server accepted a relative workspace")
 	}
 }

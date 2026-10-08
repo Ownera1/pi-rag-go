@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Breaking: stdio `rag mcp` without `--workspace` requires an absolute `workspace` argument on every tool call. It used to fall back to the server's working directory, which stays where the server was launched, so an agent that had moved to another project could silently search the previous workspace. Servers pinned with `--workspace`, including HTTP, still accept calls without it and now also reject a relative one.
+
 ## v0.5.0 (2026-10-07)
 
 - `rag tui` opens an interactive panel for a workspace: index status (counts, whether a sync or rebuild is needed and why, the last sync, failed files), every workspace setting tagged by when a change takes effect (immediately, next sync, next Zotero sync, or after rebuild), and sync, rebuild and clean with a per-file progress bar; `esc` cancels a running task. Saving validates the configuration and refuses to overwrite a `config.json` edited elsewhere since the panel loaded it. The layout adapts to the terminal size.

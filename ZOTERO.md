@@ -119,6 +119,7 @@ Go API 使用 `QueryOptions.Filter`。MCP `rag_query` 示例：
 
 ```json
 {
+  "workspace": "/absolute/knowledge-workspace",
   "query": "channel estimation",
   "mode": "hybrid",
   "disable_sync": true,
