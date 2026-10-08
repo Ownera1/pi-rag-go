@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.5.2 (2026-10-08)
+
+Existing v0.5 indexes report `rebuild required`; run `rag rebuild` once after upgrading.
+
+- Display equations from MinerU and Markdown are no longer split into their own chunks: each stays whole in the chunk of the sentence that introduces it, so lead-ins such as "Substituting to (28), we have" no longer become fragments. On six papers, formula-only chunks fell from 273 of 1118 to 8 of 749, and rerank top-5 recall on formula questions rose from 0.33 to 1.0 while prose-question MRR stayed at 0.88.
+- Display `$$…$$` formulas up to 4096 characters are kept whole; longer ones could previously be cut.
+
 ## v0.5.1 (2026-10-07)
 
 - Breaking: stdio `rag mcp` without `--workspace` requires an absolute `workspace` argument on every tool call. It used to fall back to the server's working directory, which stays where the server was launched, so an agent that had moved to another project could silently search the previous workspace. Servers pinned with `--workspace`, including HTTP, still accept calls without it and now also reject a relative one.
