@@ -528,6 +528,33 @@ func TestIndexingEmbedsDocumentsConcurrentlyWithinLimit(t *testing.T) {
 	}
 }
 
+func TestProgressReportsEachSettledDocument(t *testing.T) {
+	root := t.TempDir()
+	openTest(t, root, fakeEmbedding{}).Close()
+	var seen []IndexProgress
+	c, err := Open(Options{WorkspaceDir: root, Embedder: fakeEmbedding{}, Progress: func(p IndexProgress) { seen = append(seen, p) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	for i := range 3 {
+		sourceFile(t, docPath(c, fmt.Sprintf("note-%d.txt", i)), []byte(fmt.Sprintf("evidence %d", i)))
+	}
+	if _, err = c.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 3 || seen[2].Done != 3 || seen[2].Total != 3 || seen[2].Result.Indexed != 3 {
+		t.Fatalf("%+v", seen)
+	}
+	seen = nil
+	if _, err = c.Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 3 || seen[2].Result.Indexed != 3 {
+		t.Fatalf("rebuild %+v", seen)
+	}
+}
+
 func TestSavedStateHasOnlyWorkspaceInputs(t *testing.T) {
 	c := openTest(t, t.TempDir(), fakeEmbedding{})
 	defer c.Close()

@@ -62,6 +62,7 @@ my-project/
 | `rag status` | 查看工作区、索引和可选的 Zotero catalog 状态 |
 | `rag rebuild` | 构建新索引并原子切换，失败时保留原索引 |
 | `rag clean --keep 3` | 预览旧索引清理；加 `--confirm` 才执行删除 |
+| `rag tui` | 交互式面板：查看索引状态、编辑并保存工作区配置、带进度条运行 sync / rebuild / clean |
 
 `rag sync` 递归扫描单一文档根目录，并对 canonical 内容及 Manifest metadata 计算哈希。未变化的文档跳过解析和 embedding。每个成功替换在事务内完成；失败文档保留原有 chunks。只有扫描完整、成功且稳定时才应用删除差集。处理期间发生变化的文件留待下次同步。
 

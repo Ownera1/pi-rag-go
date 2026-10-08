@@ -60,6 +60,8 @@ Every operation reloads configuration, state and the active database. Reads hold
 
 `rag rebuild` stages a new database and publishes it atomically only after a successful stable scan and complete vector coverage. Failed rebuilds keep the active index. `rag clean --keep 3` previews inactive generation cleanup; `--confirm` permits deletion and `--dry-run` forces a preview. Active generations, unknown files and symlinks are retained; staging databases left by an interrupted rebuild are removed. SQLite read connections can create WAL sidecar files; read-only means no content/index/state mutation.
 
+`rag tui` opens an interactive panel: index status, every workspace setting tagged by when a change takes effect (immediately, next sync, next Zotero sync, or after rebuild), and sync, rebuild and clean with a progress bar. Saving validates the configuration and refuses to overwrite a `config.json` edited elsewhere since the panel loaded it.
+
 ## Document formats and provenance
 
 | Input | Canonical body content | Locations |
