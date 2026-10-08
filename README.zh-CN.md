@@ -127,7 +127,7 @@ rag query 'channel estimation' --mode bm25 --no-sync \
 
 关联优先保留手工锁定结果，再处理 Manifest 显式引用、经 API 验证的附件路径、附件文件名及唯一 DOI。没有 Manifest 的 MinerU Desktop 输出目录（`<原文件名>-<uuid>`）去掉 uuid 后缀后，与 Zotero 附件文件名精确比对，唯一命中即自动关联。标题相似匹配只生成候选。稳定 document key 优先使用 Manifest 中有效的原始文件 `sourceHash`，否则使用 canonical 文件内容哈希。锁定关联在条目被删除后保留并标记孤儿；写入 Manifest 的引用可随文档迁移。
 
-检索命中可携带 title、abstract、date/year、publication、DOI、creators、tags、collections 及关联状态。年份、标签和 collection 过滤在 BM25、中文 FTS 和向量检索的 top-k 截断前生效。重复标签或 collection 条件表示 AND，collection 仅包含直接成员；空匹配集合返回零结果。
+检索结果顶层的 `documents` 按文档 id 给出每篇命中文档的 `version`，已关联时附带 `metadata`（title、abstract、date/year、publication、DOI、creators、tags、collections 及关联状态），同一篇文档只出现一次；每个命中以 `document` 字段指向它。年份、标签和 collection 过滤在 BM25、中文 FTS 和向量检索的 top-k 截断前生效。重复标签或 collection 条件表示 AND，collection 仅包含直接成员；空匹配集合返回零结果。
 
 catalog 包含人工确认状态，应随工作区备份。完整 schema 行为、软删除保护、手工关联和过滤示例见 [ZOTERO.md](ZOTERO.md)。
 

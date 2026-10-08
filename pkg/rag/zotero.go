@@ -330,30 +330,33 @@ func (s *session) queryMetadata(ctx context.Context, f *MetadataFilter) (bool, s
 	return true, status.SyncedAt, nil
 }
 
-func (s *session) enrichMetadata(ctx context.Context, hits []Hit) error {
-	if s.bibliography == nil || len(hits) == 0 {
+// describeHits names each hit's document and describes every document once,
+// so hits from one paper do not repeat its metadata.
+func (s *session) describeHits(ctx context.Context, out *QueryResult) error {
+	if len(out.Hits) == 0 {
 		return nil
 	}
 	docs, err := s.db.Documents(ctx)
 	if err != nil {
 		return err
 	}
-	keys := map[string]string{}
-	for _, v := range docs {
-		keys[v.Path] = v.Key
+	byPath := map[string]model.CatalogDocument{}
+	for _, d := range docs {
+		byPath[d.Path] = d
 	}
-	cache := map[string]*ZoteroMetadata{}
-	for i := range hits {
-		key := keys[hits[i].Chunk.Path]
-		m, ok := cache[key]
-		if !ok {
-			m, err = s.bibliography.Metadata(ctx, key)
-			if err != nil {
+	for i := range out.Hits {
+		d := byPath[out.Hits[i].Chunk.Path]
+		out.Hits[i].Document = d.ID
+		if _, ok := out.Documents[d.ID]; ok {
+			continue
+		}
+		entry := HitDocument{Version: shortVersion(d.Hash)}
+		if s.bibliography != nil {
+			if entry.Metadata, err = s.bibliography.Metadata(ctx, d.Key); err != nil {
 				return err
 			}
-			cache[key] = m
 		}
-		hits[i].Metadata = m
+		out.Documents[d.ID] = entry
 	}
 	return nil
 }

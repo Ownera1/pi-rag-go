@@ -161,12 +161,22 @@ func TestQueryWithinDocumentAndLiteral(t *testing.T) {
 		}
 	}
 	q, err := c.Query(ctx, `\tag {7}`, QueryOptions{Mode: "literal", TopK: 20, DisableSync: true})
-	if err != nil || len(q.Hits) != 2 || q.Method != "literal" {
+	if err != nil || len(q.Hits) != 2 || q.Method != "literal" || len(q.Documents) != 2 {
 		t.Fatalf("literal: %+v %v", q, err)
 	}
 	q, err = c.Query(ctx, `\tag{7}`, QueryOptions{Mode: "literal", Document: "Alpha", DisableSync: true})
 	if err != nil || len(q.Hits) != 1 || !strings.Contains(q.Hits[0].Chunk.Content, `\tag{7}`) || !strings.HasPrefix(q.Hits[0].Chunk.ID, alpha.ID+"-") {
 		t.Fatalf("literal within alpha: %+v %v", q, err)
+	}
+	// Hits from one document share a single description of it.
+	q, err = c.Query(ctx, "evidence words", QueryOptions{Mode: "bm25", TopK: 20, Document: alpha.ID, DisableSync: true})
+	if err != nil || len(q.Hits) < 2 || len(q.Documents) != 1 || q.Documents[alpha.ID].Version != alpha.Version || q.Documents[alpha.ID].Metadata != nil {
+		t.Fatalf("documents %+v %v", q.Documents, err)
+	}
+	for _, h := range q.Hits {
+		if h.Document != alpha.ID {
+			t.Fatalf("hit document %q, want %q", h.Document, alpha.ID)
+		}
 	}
 	if _, err = c.Query(ctx, "evidence", QueryOptions{Document: "gamma", DisableSync: true}); err == nil {
 		t.Fatal("unknown document accepted")
