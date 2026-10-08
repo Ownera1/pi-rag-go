@@ -4,6 +4,8 @@
 
 Existing indexes report `rebuild required`; run `rag rebuild` once after upgrading.
 
+- Agents can read a paper instead of only searching it. `rag_read` returns one document's chunks in order, around a hit's chunk id, by chunk range or by PDF page, within a token budget with a `next` cursor, and fails on a stale `version` instead of reading shifted chunks. `rag_outline` lists a document's sections as chunk ranges with pages and the PDF path. `rag_query` takes `document` to search one paper, and `mode=literal` finds exact text such as `\tag{28}`. All three work on read-only and HTTP servers, and the MCP server's instructions describe the reading workflow. CLI: `rag list`, `rag outline`, `rag read`, `rag query --document`.
+- Breaking: `rag_list_documents` returns objects with `id`, `title`, `path` and `version` instead of bare paths.
 - MinerU headings that end in a period, such as a run-in `Proof: See Appendix A.`, are read as body text. Every later block used to inherit such a line as its section until the next real heading; on six papers this mislabeled 11 chunks, and none of the 121 real headings ends in a period.
 - MinerU tables keep their rows and columns: one line per row, cells separated by ` | `, in a chunk of their own with the caption, so a method stays next to its values. Cells used to be flattened into words, and a table could be split between chunks of surrounding prose.
 

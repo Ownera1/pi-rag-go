@@ -72,7 +72,7 @@ func NewDynamic(readOnly bool, lifecycle ...context.Context) *mcp.Server {
 }
 
 func serve(open resolve, readOnly bool, lifecycle ...context.Context) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "rag-go", Version: version.Version}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "rag-go", Version: version.Version}, &mcp.ServerOptions{Instructions: instructions})
 	if len(lifecycle) > 0 {
 		// Stateful MCP sessions detach tool contexts from the initiating HTTP
 		// request. Tie each call to this MCP process's lifetime explicitly.
@@ -93,11 +93,12 @@ func serve(open resolve, readOnly bool, lifecycle ...context.Context) *mcp.Serve
 	type queryIn struct {
 		Workspace     string              `json:"workspace,omitempty" jsonschema:"absolute path of the current project, or any directory inside it; required unless this server is pinned to one project with --workspace"`
 		Filter        *rag.MetadataFilter `json:"filter,omitempty"`
+		Document      string              `json:"document,omitempty" jsonschema:"search only this document: its id, path, or a unique part of its path or title"`
 		Query         string              `json:"query"`
 		TopK          int                 `json:"top_k,omitempty"`
 		CandidateTopK int                 `json:"candidate_top_k,omitempty"`
 		Alpha         *float64            `json:"alpha,omitempty"`
-		Mode          string              `json:"mode,omitempty"`
+		Mode          string              `json:"mode,omitempty" jsonschema:"hybrid (default), bm25, vector, or literal: exact text such as \\tag{28}, ignoring whitespace, in document order"`
 		DisableSync   bool                `json:"disable_sync,omitempty"`
 		DisableRerank bool                `json:"disable_rerank,omitempty"`
 		RequireRerank bool                `json:"require_rerank,omitempty"`
@@ -115,6 +116,7 @@ func serve(open resolve, readOnly bool, lifecycle ...context.Context) *mcp.Serve
 		defer done()
 		r, e := core.Query(ctx, in.Query, rag.QueryOptions{
 			Filter:        in.Filter,
+			Document:      in.Document,
 			DisableSync:   in.DisableSync,
 			TopK:          in.TopK,
 			CandidateTopK: in.CandidateTopK,
@@ -144,12 +146,12 @@ func serve(open resolve, readOnly bool, lifecycle ...context.Context) *mcp.Serve
 	})
 
 	type listOut struct {
-		Documents []string `json:"documents"`
+		Documents []rag.DocumentInfo `json:"documents"`
 	}
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "rag_list_documents",
-		Description: "List indexed canonical document paths",
+		Description: "List indexed documents with their ids, titles and versions",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in workspaceIn) (*mcp.CallToolResult, listOut, error) {
 		core, done, err := open(in.Workspace)
@@ -157,8 +159,46 @@ func serve(open resolve, readOnly bool, lifecycle ...context.Context) *mcp.Serve
 			return nil, listOut{}, err
 		}
 		defer done()
-		r, e := core.ListDocuments(ctx)
+		r, e := core.Documents(ctx)
 		return nil, listOut{r}, e
+	})
+
+	type documentIn struct {
+		Workspace string `json:"workspace,omitempty" jsonschema:"absolute path of the current project, or any directory inside it; required unless this server is pinned to one project with --workspace"`
+		Document  string `json:"document" jsonschema:"document id, path, or a unique part of its path or title"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "rag_outline",
+		Description: "Show one document's sections as chunk ranges and pages, to read a section with rag_read from/to",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in documentIn) (*mcp.CallToolResult, rag.Outline, error) {
+		core, done, err := open(in.Workspace)
+		if err != nil {
+			return nil, rag.Outline{}, err
+		}
+		defer done()
+		r, e := core.Outline(ctx, in.Document)
+		return nil, r, e
+	})
+
+	type readIn struct {
+		Workspace string `json:"workspace,omitempty" jsonschema:"absolute path of the current project, or any directory inside it; required unless this server is pinned to one project with --workspace"`
+		rag.ReadOptions
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "rag_read",
+		Description: "Read one document's chunks in order: around a hit's chunk id (before/after neighbours, default 2), " +
+			"a from/to chunk index range, or pages such as \"8-9\". Returns at most max_tokens (default 4000, max 16000); " +
+			"when truncated, continue from next. Reads the index only: no sync and no model calls",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in readIn) (*mcp.CallToolResult, rag.ReadResult, error) {
+		core, done, err := open(in.Workspace)
+		if err != nil {
+			return nil, rag.ReadResult{}, err
+		}
+		defer done()
+		r, e := core.Read(ctx, in.ReadOptions)
+		return nil, r, e
 	})
 
 	if !readOnly {
@@ -229,6 +269,18 @@ func serve(open resolve, readOnly bool, lifecycle ...context.Context) *mcp.Serve
 	}
 	return s
 }
+
+// instructions reach every MCP client at initialization.
+const instructions = `rag-go searches and reads the documents of a workspace, typically research papers.
+
+To explain a paper:
+1. Identify it: rag_list_documents gives ids and titles; rag_query hits carry chunk ids "<document id>-<index>".
+2. See its structure with rag_outline, then read whole sections with rag_read from/to rather than relying on search snippets.
+3. Search within it with rag_query document=<id>; jump to an equation number with mode=literal, e.g. query "\tag{28}".
+4. Expand a hit with rag_read around=<chunk id>; follow definitions, assumptions and cited equations the same way.
+5. For figures, read the pages of the returned pdf path when the client can open files.
+
+Cite page numbers and sections from the passages. Distinguish the authors' text, your own derivations, and points the documents do not support.`
 
 func indexResponse(r rag.IndexResult, err error) (*mcp.CallToolResult, rag.IndexResult, error) {
 	if err != nil {

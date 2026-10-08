@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,12 +50,20 @@ func checkTools(t *testing.T, ctx context.Context, session *mcp.ClientSession, r
 	names := []string{}
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
+		if tool.Name == "rag_read" {
+			schema, _ := json.Marshal(tool.InputSchema)
+			for _, field := range []string{`"around"`, `"from"`, `"pages"`, `"max_tokens"`, `"workspace"`} {
+				if !strings.Contains(string(schema), field) {
+					t.Fatalf("rag_read schema lacks %s: %s", field, schema)
+				}
+			}
+		}
 		if tool.Name == "rag_query" && (tool.Annotations == nil || tool.Annotations.ReadOnlyHint != readOnly) {
 			t.Fatal("wrong query read-only annotation")
 		}
 	}
 	sort.Strings(names)
-	want := []string{"rag_list_documents", "rag_query", "rag_status"}
+	want := []string{"rag_list_documents", "rag_outline", "rag_query", "rag_read", "rag_status"}
 	if !readOnly {
 		want = append(want, "rag_rebuild", "rag_sync", "rag_zotero_sync", "rag_zotero_match", "rag_zotero_link")
 		sort.Strings(want)
@@ -188,7 +197,7 @@ func TestDynamicServerResolvesWorkspacePerCall(t *testing.T) {
 	}
 	defer session.Close()
 	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 8 {
+	if err != nil || len(tools.Tools) != 10 {
 		t.Fatalf("server outside a workspace: %+v %v", tools, err)
 	}
 	if _, r := statusRoot(t, ctx, session, map[string]any{}); r == nil || !r.IsError {

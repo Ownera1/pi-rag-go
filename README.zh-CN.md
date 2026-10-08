@@ -134,17 +134,19 @@ catalog 包含人工确认状态，应随工作区备份。完整 schema 行为�
 ## MCP 与 Agent 接入
 
 ```sh
-rag mcp                                         # 本地 stdio，8 个工具，每次调用确定工作区
+rag mcp                                         # 本地 stdio，10 个工具，每次调用确定工作区
 rag mcp --workspace /absolute/project           # stdio，固定一个工作区
-rag mcp --read-only                              # stdio，3 个只读工具
+rag mcp --read-only                              # stdio，5 个只读工具
 rag mcp --transport http --listen 127.0.0.1:7331   # 前台运行，只读 HTTP
 ```
 
-本地可写 MCP 提供 `rag_query`、`rag_status`、`rag_list_documents`、`rag_sync`、`rag_rebuild`、`rag_zotero_sync`、`rag_zotero_match` 和 `rag_zotero_link`。查询参数支持 `query`、`mode`、`top_k`、`candidate_top_k`、`alpha`、`disable_rerank`、`require_rerank`；`disable_sync=true` 禁用正文自动同步，`filter` 在召回前应用缓存的 Zotero metadata 条件。
+本地可写 MCP 提供 `rag_query`、`rag_read`、`rag_outline`、`rag_status`、`rag_list_documents`、`rag_sync`、`rag_rebuild`、`rag_zotero_sync`、`rag_zotero_match` 和 `rag_zotero_link`。查询参数支持 `query`、`mode`、`top_k`、`candidate_top_k`、`alpha`、`disable_rerank`、`require_rerank`；`disable_sync=true` 禁用正文自动同步，`filter` 在召回前应用缓存的 Zotero metadata 条件，`document`（文档 id、路径，或路径/标题中唯一的片段）把召回限定在一篇文档内。
+
+Agent 可以借助三个读取工具越过检索片段连续阅读论文；它们只读索引，不同步、不调用模型。`rag_list_documents` 返回每篇文档的 `id`、`title`（已关联时用 Zotero 标题）、`path` 和 `version`。`rag_outline` 以 chunk 序号区间和页码列出章节，文档目录中恰有一个 PDF 时一并返回其路径。`rag_read` 按文档顺序返回 chunk，可用命中的 chunk id（`<文档 id>-<序号>`）配合 `before`/`after`（默认各 2）定位 `around`，或按 `from`/`to` 序号区间、按 PDF 物理页 `pages`（如 `8-9`）读取；输出不超过 `max_tokens`（默认 4000，上限 16000），被截断时给出续读起点 `next`；传入的 `version` 与当前不符时直接报错，不会读到错位的 chunk。`mode=literal` 忽略空白做原文匹配并按文档顺序返回，`\tag{28}` 即可定位公式 (28)。MCP 服务的 instructions 会把这套阅读流程告知所有客户端。命令行对应 `rag list`、`rag outline 文档`、`rag read --document … --from/--to/--around/--pages` 和 `rag query --document … --mode literal`。
 
 不带 `--workspace` 时，stdio `rag mcp` 可在任意目录启动，每次调用都按必填的 `workspace` 工具参数确定工作区：Agent 当前项目的绝对路径，或其中任意子目录。调用不携带工作目录，而服务自身的目录在 Agent 切换项目后仍停留在启动位置，因此不设默认值，缺省或相对路径会被拒绝。在工作区之外调用会提示如何初始化。带 `--workspace` 启动的服务和所有 HTTP 服务只服务一个工作区：此时 `workspace` 可省略，便于不知道本机路径的远程客户端调用；若传入则必须是绝对路径且位于该工作区内。
 
-只读 stdio 和所有 HTTP 服务仅暴露 query/status/list，拒绝写工具并关闭自动同步。查询仍可调用配置的 query embedding 或 reranker。HTTP 仅监听 loopback，保留 Host/Origin 校验，将地址打印到 stderr；不指定端口时使用临时端口。远程隧道可接入只读 stdio 或可选 HTTP 服务，隧道安装与账号配置由外部工具管理。
+只读 stdio 和所有 HTTP 服务仅暴露 query/read/outline/status/list，拒绝写工具并关闭自动同步。查询仍可调用配置的 query embedding 或 reranker。HTTP 仅监听 loopback，保留 Host/Origin 校验，将地址打印到 stderr；不指定端口时使用临时端口。远程隧道可接入只读 stdio 或可选 HTTP 服务，隧道安装与账号配置由外部工具管理。
 
 ```sh
 rag connect claude
@@ -163,7 +165,7 @@ Embedding 支持 Voyage，以及接收 `POST {baseUrl}/embeddings` 并返回 `da
 
 切块前会合并同一章节、同一页内相邻的正文 block，使 MinerU 等按段落导出的格式切出接近目标大小的块，且不会扩大页码范围。默认的 `semantic` 切块会先为每个句子级单元生成 embedding 来选择边界，再为最终的块生成 embedding，因此索引消耗的 embedding tokens 约为 `legacy` 的两倍。`indexing.embeddingWorkers`（默认 4）限制同时进行的文档 embedding 请求数。
 
-查询模式为 `hybrid`（默认）、`bm25` 和 `vector`；`--no-rerank` 可用于基线测试。Hybrid 在查询 embedding 暂时失败时降级为 BM25，并返回 `method`/`degraded`；vector 模式返回错误。调用取消会中止操作。BM25 命中任一查询词即可召回，中文 BM25 使用汉字 unigram/bigram 索引。Hybrid 使用加权倒数排名融合（RRF，k = 60）合并 BM25 与向量两路排名；alpha 是 BM25 排名的权重，1 - alpha 是向量排名的权重。结果中的 `bm25` 和 `vector` 为原始 BM25 相关度与余弦相似度，`hybrid` 为融合分数。
+查询模式为 `hybrid`（默认）、`bm25`、`vector` 和 `literal`；`--no-rerank` 可用于基线测试。Hybrid 在查询 embedding 暂时失败时降级为 BM25，并返回 `method`/`degraded`；vector 模式返回错误。调用取消会中止操作。BM25 命中任一查询词即可召回，中文 BM25 使用汉字 unigram/bigram 索引。Hybrid 使用加权倒数排名融合（RRF，k = 60）合并 BM25 与向量两路排名；alpha 是 BM25 排名的权重，1 - alpha 是向量排名的权重。结果中的 `bm25` 和 `vector` 为原始 BM25 相关度与余弦相似度，`hybrid` 为融合分数。
 
 默认 alpha 为 `0.4`，candidate top K 为 `30`，top K 为 `5`，语义分块阈值为 `120/280/420/140`。查询 usage 记录逻辑调用次数及估算 tokens，不包含重试和正文同步成本；同步报告单独记录索引工作。
 
@@ -208,4 +210,4 @@ rag eval --dataset evaluation/sample/questions.jsonl --modes bm25,vector,hybrid 
 
 评估直接调用 Core，需要已同步且兼容的索引，运行期间不会自动同步。报告包含 Recall@K、MRR、p50/p95 延迟、失败、降级、usage 及可选费用估算。样例数据为合成数据，详见 [评估说明](evaluation/README.md)。
 
-`pkg/rag` 提供 `Open(Options{WorkspaceDir, ReadOnly, Embedder, Reranker})`，以及 `Core.Sync`、`Query`、`Status`、`ListDocuments`、`Rebuild`、`Cleanup`、`SyncZotero`、`MatchZotero`、`LinkZotero`、`ZoteroStatus`、`ZoteroLinks`、`Close` 和 `DefaultConfig`。操作接收 `context.Context`；注入的 provider 须支持并发调用。Core 不依赖 MCP 或外部文档提取工具。
+`pkg/rag` 提供 `Open(Options{WorkspaceDir, ReadOnly, Embedder, Reranker})`，以及 `Core.Sync`、`Query`、`Documents`、`Read`、`Outline`、`Status`、`ListDocuments`、`Rebuild`、`Cleanup`、`SyncZotero`、`MatchZotero`、`LinkZotero`、`ZoteroStatus`、`ZoteroLinks`、`Close` 和 `DefaultConfig`。操作接收 `context.Context`；注入的 provider 须支持并发调用。Core 不依赖 MCP 或外部文档提取工具。

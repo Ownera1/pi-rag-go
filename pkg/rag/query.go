@@ -116,6 +116,30 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 	if stats.Chunks == 0 {
 		return out, nil
 	}
+	if opts.Document != "" {
+		d, err := c.resolveDocument(ctx, opts.Document)
+		if err != nil {
+			return out, err
+		}
+		if err = c.db.RestrictDocument(ctx, d.info.Path, filtered); err != nil {
+			return out, err
+		}
+		filtered = true
+	}
+	if mode == "literal" {
+		ids, err := c.db.Literal(ctx, query, topK, filtered)
+		if err != nil {
+			return out, err
+		}
+		chunks, err := c.db.Chunks(ctx, ids)
+		if err != nil {
+			return out, err
+		}
+		for _, id := range ids {
+			out.Hits = append(out.Hits, model.Hit{Chunk: chunks[id]})
+		}
+		return out, c.enrichMetadata(ctx, out.Hits)
+	}
 	recall := topK
 	if reranker != nil {
 		recall = candidate
@@ -320,10 +344,10 @@ func validateQuery(cfg Config, text string, opts QueryOptions, hasReranker bool)
 	if p.mode == "" {
 		p.mode = "hybrid"
 	}
-	if p.mode != "bm25" && p.mode != "vector" && p.mode != "hybrid" {
-		return p, errors.New("mode must be hybrid, vector or bm25")
+	if p.mode != "bm25" && p.mode != "vector" && p.mode != "hybrid" && p.mode != "literal" {
+		return p, errors.New("mode must be hybrid, vector, bm25 or literal")
 	}
-	if opts.RequireRerank && (!hasReranker || opts.DisableRerank) {
+	if opts.RequireRerank && (!hasReranker || opts.DisableRerank || p.mode == "literal") {
 		return p, errors.New("reranker required but unavailable")
 	}
 	return p, nil
