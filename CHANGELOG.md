@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.5.1 (2026-10-07)
 
 - Breaking: stdio `rag mcp` without `--workspace` requires an absolute `workspace` argument on every tool call. It used to fall back to the server's working directory, which stays where the server was launched, so an agent that had moved to another project could silently search the previous workspace. Servers pinned with `--workspace`, including HTTP, still accept calls without it and now also reject a relative one.
 
