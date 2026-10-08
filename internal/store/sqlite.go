@@ -388,10 +388,10 @@ INSERT INTO chunks (
 		if err != nil {
 			return err
 		}
-		if _, err = insertFTS.ExecContext(ctx, rowid, c.Content, doc.Path, c.Heading); err != nil {
+		if _, err = insertFTS.ExecContext(ctx, rowid, c.Content, doc.SearchPath, c.Heading); err != nil {
 			return err
 		}
-		if _, err = insertHan.ExecContext(ctx, rowid, searchtext.Indexed(c.Content+" "+doc.Path+" "+c.Heading)); err != nil {
+		if _, err = insertHan.ExecContext(ctx, rowid, searchtext.Indexed(c.Content+" "+doc.SearchPath+" "+c.Heading)); err != nil {
 			return err
 		}
 		if _, err = insertVector.ExecContext(ctx, rowid, vecBytes(vectors[i])); err != nil {

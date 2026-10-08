@@ -22,7 +22,7 @@ import (
 	"github.com/Ownera1/rag-go/internal/workspace"
 )
 
-const ParserVersion = "document-blocks-v5"
+const ParserVersion = "document-blocks-v6"
 const MaxDocumentBytes = 64 << 20
 
 type Manifest struct {

@@ -163,8 +163,8 @@ func withPages(blocks, ref []model.Block) ([]model.Block, error) {
 // MiddleJson (MinerU Desktop's layout.json) is read span by span: MinerU moves
 // the lines of a paragraph continuing onto the next page to the paragraph's
 // first block and marks their spans cross_page, so those spans are given the
-// next page. Its inline math and algorithm listings, which content lists
-// omit, are kept as well. Other exports are parsed as ParseMinerU does.
+// next page. Its inline math and algorithm listings are kept as well. Other
+// exports are parsed as ParseMinerU does.
 func pageRef(ctx context.Context, b []byte) ([]model.Block, error) {
 	var root struct {
 		PDFInfo []struct {

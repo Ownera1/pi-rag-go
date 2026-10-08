@@ -33,6 +33,9 @@ func (c *session) cleanup(ctx context.Context, keep int, dryRun bool) (result Cl
 	// A rebuild killed mid-way leaves its staging database behind; the exclusive
 	// lock held here means no rebuild is in progress.
 	staging := filepath.Join(c.root, "staging")
+	if info, e := os.Lstat(staging); e == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+		return result, errors.New("staging must be a real directory")
+	}
 	staged, err := os.ReadDir(staging)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return result, err

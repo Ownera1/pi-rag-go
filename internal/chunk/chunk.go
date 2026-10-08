@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -40,7 +41,7 @@ func isCJK(r rune) bool {
 }
 
 // Version identifies chunk boundary behavior for the processing fingerprint.
-const Version = "merged-blocks-v1"
+const Version = "merged-blocks-v2"
 
 func sameInt(a, b *int) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
 
@@ -117,22 +118,103 @@ func spans(text string) []string {
 	return parts
 }
 
+// sentenceEnd reports a sentence boundary at r[i]. Chinese text puts no space
+// after 。！？, so only Latin punctuation needs one.
+func sentenceEnd(r []rune, i int) bool {
+	return strings.ContainsRune("。！？", r[i]) ||
+		strings.ContainsRune(".!?", r[i]) && i+1 < len(r) && unicode.IsSpace(r[i+1])
+}
+
+// maxMath bounds a kept-whole formula, so a stray "$" in code or prose cannot
+// push a cut far past its limit.
+// ponytail: a formula may overrun a chunk's token limit by up to maxMath runes.
+const maxMath = 512
+
+// mathSpans returns the rune ranges of $…$ and $$…$$ formulas, which every
+// split keeps whole. An inline formula ends at its line; neither spans a blank
+// line.
+func mathSpans(r []rune) []unit {
+	spans := []unit{}
+	for i := 0; i < len(r); i++ {
+		if r[i] == '\\' {
+			i++
+			continue
+		}
+		if r[i] != '$' {
+			continue
+		}
+		delim := 1
+		if i+1 < len(r) && r[i+1] == '$' {
+			delim = 2
+		}
+		for j := i + delim; j < len(r) && j-i <= maxMath; j++ {
+			if r[j] == '\\' {
+				j++
+				continue
+			}
+			if r[j] == '\n' && (delim == 1 || j+1 < len(r) && r[j+1] == '\n') {
+				break
+			}
+			if r[j] != '$' || delim == 2 && (j+1 >= len(r) || r[j+1] != '$') {
+				continue
+			}
+			spans = append(spans, unit{i, j + delim})
+			i = j + delim - 1
+			break
+		}
+	}
+	return spans
+}
+
+// within returns the formula that position cut falls strictly inside.
+func within(spans []unit, cut int) (unit, bool) {
+	k := sort.Search(len(spans), func(k int) bool { return spans[k].end > cut })
+	if k < len(spans) && spans[k].start < cut {
+		return spans[k], true
+	}
+	return unit{}, false
+}
+
+// cutBefore moves a cut out of a formula: back to its start, or past its end
+// when the formula starts the piece and cannot be left out.
+func cutBefore(spans []unit, from, cut int) int {
+	if s, ok := within(spans, cut); ok {
+		if s.start > from {
+			return s.start
+		}
+		return s.end
+	}
+	return cut
+}
+
+// cutAfter moves the start of a tail out of a formula, dropping the fragment.
+func cutAfter(spans []unit, cut int) int {
+	if s, ok := within(spans, cut); ok {
+		return s.end
+	}
+	return cut
+}
+
 func hardSplit(text string, maxTokens int) []string {
 	r := []rune(text)
+	spans := mathSpans(r)
 	out := []string{}
-	for len(r) > 0 {
-		lo, hi, best := 1, len(r), 1
+	for from := 0; from < len(r); {
+		// Any span over 4*maxTokens runes exceeds maxTokens, which bounds the
+		// search on a long line such as minified code.
+		lo, hi, best := from+1, min(len(r), from+4*maxTokens+4), from+1
 		for lo <= hi {
 			mid := (lo + hi) / 2
-			if Estimate(string(r[:mid])) <= maxTokens {
+			if Estimate(string(r[from:mid])) <= maxTokens {
 				best = mid
 				lo = mid + 1
 			} else {
 				hi = mid - 1
 			}
 		}
-		out = append(out, string(r[:best]))
-		r = r[best:]
+		best = cutBefore(spans, from, best)
+		out = append(out, string(r[from:best]))
+		from = best
 	}
 	return out
 }
@@ -142,9 +224,17 @@ func splitOversized(s string, maxTokens int) []string {
 		return []string{s}
 	}
 	r := []rune(s)
+	spans := mathSpans(r)
 	parts := []string{}
 	start := 0
-	for i := 0; i < len(r); {
+	for i, k := 0, 0; i < len(r); {
+		for k < len(spans) && spans[k].end <= i {
+			k++
+		}
+		if k < len(spans) && spans[k].start <= i {
+			i = spans[k].end
+			continue
+		}
 		if r[i] == '\n' {
 			if i > start {
 				parts = append(parts, string(r[start:i]))
@@ -155,7 +245,7 @@ func splitOversized(s string, maxTokens int) []string {
 			start = i
 			continue
 		}
-		if strings.ContainsRune("。！？.!?", r[i]) && i+1 < len(r) && unicode.IsSpace(r[i+1]) {
+		if sentenceEnd(r, i) {
 			if i+1 > start {
 				parts = append(parts, string(r[start:i+1]))
 			}
@@ -244,7 +334,7 @@ func Legacy(blocks []model.Block, configs ...model.ChunkingConfig) []model.Chunk
 		if cfg.LegacyOverlap > 0 && strings.TrimSpace(added) != "" {
 			r := []rune(buf)
 			keep := min(len(r), cfg.LegacyOverlap*2)
-			buf = string(r[len(r)-keep:])
+			buf = string(r[cutAfter(mathSpans(r), len(r)-keep):])
 			added = ""
 			if end > 0 {
 				start = max(1, end-strings.Count(buf, "\n"))
@@ -268,7 +358,7 @@ func Legacy(blocks []model.Block, configs ...model.ChunkingConfig) []model.Chunk
 					reset()
 					break
 				}
-				buf = string(r[(len(r)+1)/2:])
+				buf = string(r[cutAfter(mathSpans(r), (len(r)+1)/2):])
 			}
 		}
 		if buf == "" {
@@ -331,6 +421,7 @@ func Legacy(blocks []model.Block, configs ...model.ChunkingConfig) []model.Chunk
 type unit struct{ start, end int }
 
 func splitUnits(r []rune, unitMax int) []unit {
+	spans := mathSpans(r)
 	all := []unit{}
 	add := func(from, to int) {
 		for from < to {
@@ -359,6 +450,7 @@ func splitUnits(r []rune, unitMax int) []unit {
 				if space > from+(best-from)/2 {
 					n = space + 1
 				}
+				n = cutBefore(spans, from, n)
 			}
 			if strings.TrimSpace(string(r[from:n])) != "" {
 				all = append(all, unit{from, n})
@@ -367,7 +459,14 @@ func splitUnits(r []rune, unitMax int) []unit {
 		}
 	}
 	start := 0
-	for i := 0; i < len(r); {
+	for i, k := 0, 0; i < len(r); {
+		for k < len(spans) && spans[k].end <= i {
+			k++
+		}
+		if k < len(spans) && spans[k].start <= i {
+			i = spans[k].end
+			continue
+		}
 		if r[i] == '\n' {
 			j := i
 			for j < len(r) && r[j] == '\n' {
@@ -378,7 +477,7 @@ func splitUnits(r []rune, unitMax int) []unit {
 			i = j
 			continue
 		}
-		if strings.ContainsRune(".!?。！？", r[i]) && i+1 < len(r) && unicode.IsSpace(r[i+1]) {
+		if sentenceEnd(r, i) {
 			j := i + 1
 			for j < len(r) && unicode.IsSpace(r[j]) && r[j] != '\n' {
 				j++

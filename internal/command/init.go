@@ -129,7 +129,7 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 		return errors.New("documents cannot be inside .rag-go")
 	}
 	keys := map[string]string{}
-	for _, p := range []model.ProviderConfig{cfg.Embedding, cfg.Reranker} {
+	for i, p := range []model.ProviderConfig{cfg.Embedding, cfg.Reranker} {
 		name := p.APIKeyEnv
 		if name == "" {
 			continue
@@ -145,7 +145,13 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 		if err != nil {
 			return err
 		}
-		value := os.Getenv(name)
+		// An existing config may come from a cloned repository, so its
+		// untrusted endpoint gets an environment key only when this run chose
+		// that endpoint.
+		value := ""
+		if trusted || fresh || i == 0 && supplied["base-url"] {
+			value = os.Getenv(name)
+		}
 		if value != "" && (shared[name] == "" || !trusted) {
 			local[name] = value
 		}

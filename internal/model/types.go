@@ -27,6 +27,10 @@ type Document struct {
 	Size          int64            `json:"size"`
 	Format        string           `json:"format"`
 	Blocks        []Block          `json:"blocks"`
+
+	// SearchPath is Path below the documents root, indexed for keyword search
+	// so the absolute prefix every document shares matches nothing.
+	SearchPath string `json:"-"`
 }
 
 type Chunk struct {

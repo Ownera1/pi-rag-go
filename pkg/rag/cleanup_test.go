@@ -116,3 +116,22 @@ func TestClosedCoreRejectsWrites(t *testing.T) {
 		t.Fatal("Cleanup after Close succeeded")
 	}
 }
+
+func TestCleanupRefusesSymlinkedStaging(t *testing.T) {
+	root := t.TempDir()
+	c := openTest(t, filepath.Join(root, "store"), fakeEmbedding{})
+	defer c.Close()
+	victim := filepath.Join(root, "outside", "1-0123456789abcdef")
+	if err := os.MkdirAll(victim, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Dir(victim), filepath.Join(root, "store", ".rag-go", "staging")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Cleanup(context.Background(), 1, false); err == nil {
+		t.Fatal("followed a symlinked staging directory")
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -160,3 +160,43 @@ func TestSemanticBatchesUnitsAcrossBlocks(t *testing.T) {
 		t.Fatalf("%d embedding calls for 20 units, want 1", p.calls)
 	}
 }
+
+func TestChineseSentencesNeedNoTrailingSpace(t *testing.T) {
+	if units := splitUnits([]rune("第一句话。第二句话！第三句话？"), 100); len(units) != 3 {
+		t.Fatalf("units=%v", units)
+	}
+}
+
+func TestSplitsKeepFormulasWhole(t *testing.T) {
+	text := strings.Repeat(`We estimate $\mathbf{H} = \mathbf{Y}\mathbf{X}^{-1}. x$ from pilots, and $$y = Hx + n$$ holds. `, 30)
+	whole := func(name string, parts []string) {
+		t.Helper()
+		for _, p := range parts {
+			if strings.Count(p, "$")%2 != 0 {
+				t.Fatalf("%s cut a formula: %q", name, p)
+			}
+		}
+	}
+	parts := hardSplit(text, 7)
+	if strings.Join(parts, "") != text {
+		t.Fatal("hardSplit lost text")
+	}
+	whole("hardSplit", parts)
+	whole("splitOversized", splitOversized(text, 10))
+	r := []rune(text)
+	units := []string{}
+	for _, u := range splitUnits(r, 5) {
+		units = append(units, string(r[u.start:u.end]))
+	}
+	whole("splitUnits", units)
+	cfg := model.DefaultChunking()
+	cfg.LegacyTarget, cfg.LegacyMax, cfg.LegacyOverlap = 20, 30, 7
+	contents := []string{}
+	for _, c := range Legacy([]model.Block{{Text: text}}, cfg) {
+		contents = append(contents, c.Content)
+	}
+	whole("Legacy", contents)
+	if spans := mathSpans([]rune(`price \$5 and $a$ then $$b$$`)); len(spans) != 2 {
+		t.Fatalf("spans=%v", spans)
+	}
+}

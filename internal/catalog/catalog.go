@@ -354,10 +354,18 @@ func (d *DB) Match(ctx context.Context, docs []model.CatalogDocument, kind, id s
 	}
 	for _, doc := range docs {
 		var locked bool
-		var previousKind, previousID string
-		err = d.SQL.QueryRowContext(ctx, "SELECT locked,library_type,library_id FROM document_zotero_links WHERE document_key=?", doc.Key).Scan(&locked, &previousKind, &previousID)
+		var previousKind, previousID, previousItem, previousAttachment, previousMethod string
+		err = d.SQL.QueryRowContext(ctx, "SELECT locked,library_type,library_id,item_key,attachment_key,match_method FROM document_zotero_links WHERE document_key=?", doc.Key).Scan(&locked, &previousKind, &previousID, &previousItem, &previousAttachment, &previousMethod)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return r, err
+		}
+		// A manifest's reference follows the manifest; only a manual link stays.
+		if locked && previousMethod == "explicit" && (doc.Zotero == nil || doc.Zotero.LibraryType != previousKind ||
+			doc.Zotero.ItemKey != previousItem || doc.Zotero.AttachmentKey != previousAttachment) {
+			if _, err = d.SQL.ExecContext(ctx, "DELETE FROM document_zotero_links WHERE document_key=?", doc.Key); err != nil {
+				return r, err
+			}
+			locked, previousKind, previousID = false, "", ""
 		}
 		if locked {
 			if _, err = d.SQL.ExecContext(ctx, "UPDATE catalog_documents SET last_path=? WHERE document_key=?", doc.Path, doc.Key); err != nil {

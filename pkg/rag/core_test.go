@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Ownera1/rag-go/internal/model"
 	"github.com/Ownera1/rag-go/internal/store"
 	"github.com/Ownera1/rag-go/internal/workspace"
 )
@@ -544,5 +545,36 @@ func TestSavedStateHasOnlyWorkspaceInputs(t *testing.T) {
 	}
 	if fields["inputs"] == nil || fields["trackedPaths"] != nil || fields["sourcePaths"] != nil {
 		t.Fatal(string(b))
+	}
+}
+
+type failingReranker struct{}
+
+func (failingReranker) Model() string { return "fake" }
+func (failingReranker) Rerank(context.Context, string, []model.RerankDoc, int) ([]model.RerankResult, error) {
+	return nil, errors.New("model HTTP 500: fixture")
+}
+
+func TestRequiredRerankFailureIsAnError(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	c := openTest(t, root, fakeEmbedding{})
+	if err := os.WriteFile(docPath(c, "a.txt"), []byte("stable evidence"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := c.Sync(ctx); err != nil || r.Failed > 0 {
+		t.Fatalf("sync: %+v %v", r, err)
+	}
+	c.Close()
+	c, err := Open(Options{WorkspaceDir: root, Embedder: fakeEmbedding{}, Reranker: failingReranker{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err = c.Query(ctx, "evidence", QueryOptions{RequireRerank: true}); err == nil {
+		t.Fatal("required rerank degraded silently")
+	}
+	if r, err := c.Query(ctx, "evidence", QueryOptions{}); err != nil || r.Method != "rerank-fallback" {
+		t.Fatalf("optional rerank: %+v %v", r, err)
 	}
 }

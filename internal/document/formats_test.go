@@ -149,17 +149,35 @@ func TestJATSBodySectionsAndExclusions(t *testing.T) {
 	}
 }
 
+func TestMinerUKeepsMathAndAlgorithms(t *testing.T) {
+	for name, source := range map[string]string{
+		"v1": `[{"type":"text","text":"Signal evidence","page_idx":0},{"type":"code","sub_type":"algorithm","code_caption":["Algorithm 1"],"code_body":"repeat update","page_idx":0}]`,
+		"v2": `[[{"type":"paragraph","content":{"paragraph_content":[{"type":"text","content":"Signal evidence with"},{"type":"equation_inline","content":"\\mathbf{H}"}]}},` +
+			`{"type":"code","content":{"code_caption":[{"type":"text","content":"Algorithm 1"}],"code_content":[{"type":"text","content":"repeat update"}]}}]]`,
+		"legacy-middle": `{"pdf_info":[{"page_idx":0,"para_blocks":[` +
+			`{"type":"text","lines":[{"spans":[{"type":"text","content":"Signal evidence with"},{"type":"inline_equation","content":"\\mathbf{H}"}]}]},` +
+			`{"type":"interline_equation","lines":[{"spans":[{"type":"interline_equation","content":"y = Hx"}]}]},` +
+			`{"type":"code","blocks":[{"type":"code_caption","lines":[{"spans":[{"type":"text","content":"Algorithm 1"}]}]},{"type":"code_body","lines":[{"spans":[{"type":"text","content":"repeat update"}]}]}]}]}]}`,
+	} {
+		blocks, err := ParseMinerU(context.Background(), []byte(source))
+		text := joined(blocks)
+		if err != nil || !strings.Contains(text, "Signal evidence") || !strings.Contains(text, "Algorithm 1") || !strings.Contains(text, "repeat update") ||
+			name != "v1" && !strings.Contains(text, "$\\mathbf{H}$") || name == "legacy-middle" && !strings.Contains(text, "$$y = Hx$$") {
+			t.Fatalf("%s: %q err=%v", name, text, err)
+		}
+	}
+}
+
 func TestMinerUContractsAndPhysicalPages(t *testing.T) {
 	tests := []struct {
 		name, source, text string
 		page               int
 	}{
 		{"v1", `[{"type":"text","text":"Methods","text_level":1,"page_idx":2},{"type":"text","text":"Signal evidence","page_idx":2},{"type":"image","text":"LEAK","page_idx":2},` +
-			`{"type":"code","code_body":"LEAK","page_idx":2},` +
 			`{"type":"ref_text","text":"LEAK","page_idx":2},{"type":"header","text":"LEAK","page_idx":2},` +
 			`{"type":"footer","text":"LEAK","page_idx":2},{"type":"page_number","text":"LEAK","page_idx":2},` +
 			`{"type":"page_footnote","text":"LEAK","page_idx":2}]`, "Signal evidence", 3},
-		{"v2", `[[{"type":"title","content":{"title_content":[{"type":"text","content":"Methods"}],"level":1}},{"type":"paragraph","content":{"paragraph_content":[{"type":"text","content":"Signal evidence"},{"type":"inline_equation","content":"LEAK"}]}},{"type":"list","content":{"list_type":"reference_list","list_items":[{"item_content":"LEAK"}]}}]]`, "Signal evidence", 0},
+		{"v2", `[[{"type":"title","content":{"title_content":[{"type":"text","content":"Methods"}],"level":1}},{"type":"paragraph","content":{"paragraph_content":[{"type":"text","content":"Signal evidence"}]}},{"type":"list","content":{"list_type":"reference_list","list_items":[{"item_content":"LEAK"}]}}]]`, "Signal evidence", 0},
 		{"middle", `{"schema":"docvortex.middle","schema_version":"2.0","pages":[{"page_idx":7,"blocks":[{"type":"text","content":[{"type":"text","content":"Signal evidence"}]}]}]}`, "Signal evidence", 8},
 		{"structured", `{"pages":[{"page_idx":7,"blocks":[{"type":"text","content":"Signal evidence"}]}]}`, "Signal evidence", 8},
 		{"legacy-middle", `{"pdf_info":[{"page_idx":7,"para_blocks":[{"type":"text","lines":[{"spans":[{"type":"text","content":"Signal evidence"}]}]}]}]}`, "Signal evidence", 8},

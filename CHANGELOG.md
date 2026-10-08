@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+Existing v0.4 indexes report `rebuild required`; run `rag rebuild` once after upgrading.
+
+- Security: `rag init` on an existing workspace config no longer reads an environment variable for an untrusted endpoint, so a cloned `.rag-go/config.json` naming another `baseUrl` and, say, `GITHUB_TOKEN` cannot have that token saved or sent by the probe. A new workspace or an explicit `--base-url` still reads it.
+- MinerU text is kept more completely: inline equations (content list v2, middle JSON) as `$…$`, display equations in legacy middle JSON as `$$…$$`, algorithm and code blocks with their captions in their own chunks, and figure and table captions in middle JSON.
+- Chunk splits never cut a `$…$` or `$$…$$` formula: length cuts, sentence breaks and legacy overlap move to a formula's edge.
+- Chinese sentences split at `。！？` without a following space, so semantic chunking gets sentence boundaries in Chinese text.
+- Keyword search indexes each document's path below the documents root instead of its absolute path, so a directory name shared by every document, such as `rag` or `documents`, no longer matches every chunk.
+- `require_rerank` fails when the reranker errors instead of silently returning unreranked results; `rag eval --modes rerank` counts those as failures.
+- A Zotero reference in a `rag-source.json` manifest follows edits to the manifest; previously the first linked item stuck. Manual links from `rag zotero link` still stay.
+- Hard splits of very long unbroken lines, such as minified code, are bounded and no longer take minutes.
+- `rag install` no longer panics on an agent config that is `null` or has `"mcpServers": null`.
+- `rag clean` refuses a symlinked `.rag-go/staging` instead of following it.
+
 ## v0.4.0 (2026-10-07)
 
 Existing v0.3 indexes report `rebuild required`; run `rag rebuild` once after upgrading.
