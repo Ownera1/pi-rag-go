@@ -197,15 +197,15 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 				value = linesText(item)
 			}
 		case "code", "algorithm":
-			// Algorithm listings are body text; own chunks like equations.
+			// Algorithm listings are body text in their own chunks.
 			kind = "code"
 			value = figureText(item, "code")
 			if strings.TrimSpace(value) == "" {
 				value = linesText(item)
 			}
 		case "equation", "equation_interline", "interline_equation":
-			// Own chunks: LaTeX merged into prose dilutes its embedding.
-			kind = "equation"
+			// Display equations join their prose; chunking keeps $$…$$ whole
+			// and with the sentence that introduces it.
 			value = jsonText(item["text"])
 			if content != nil {
 				if math := jsonText(content["math_content"]); math != "" {

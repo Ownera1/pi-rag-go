@@ -43,18 +43,14 @@ func TestMarkdownASTHeadingsAndSourceLines(t *testing.T) {
 func TestMarkdownPaperFilters(t *testing.T) {
 	source := "# Model\n\nThe signal is\n\n$$\n\\mathbf{Y}=\\mathbf{H}\\mathbf{X}\n$$\n\n$$ \\nu_l $$\n\n![Fig. 2 system](images/a.png)\n<table><tr><td>SNR &amp; BER</td></tr></table>\nafter\n\n# References\n\n[1] CITE_LEAK\n\n## Sub\n\nSUB_LEAK\n\n# Appendix\n\nproof\n"
 	blocks, err := markdown(context.Background(), []byte(source))
-	if err != nil || len(blocks) != 4 {
+	if err != nil || len(blocks) != 2 {
 		t.Fatalf("blocks=%+v err=%v", blocks, err)
 	}
-	prose, eq, tail, app := blocks[0], blocks[1], blocks[2], blocks[3]
-	if prose.Kind != "" || prose.Text != "# Model\n\nThe signal is" || *prose.LineEnd != 3 {
-		t.Fatalf("prose: %+v", prose)
-	}
-	if eq.Kind != "equation" || *eq.LineStart != 5 || *eq.LineEnd != 9 || !strings.HasSuffix(eq.Text, "$$ \\nu_l $$") {
-		t.Fatalf("equation: %+v", eq)
-	}
-	if tail.Kind != "" || tail.Text != "Fig. 2 system\nSNR & BER\nafter" || *tail.LineStart != 11 || *tail.LineEnd != 13 {
-		t.Fatalf("figure/table: %+v", tail)
+	// Display equations stay in their prose block.
+	body, app := blocks[0], blocks[1]
+	if !strings.HasPrefix(body.Text, "# Model\n\nThe signal is\n\n$$") || !strings.Contains(body.Text, "$$ \\nu_l $$\n\nFig. 2 system\nSNR & BER\nafter") ||
+		*body.LineStart != 1 || *body.LineEnd != 13 {
+		t.Fatalf("body: %+v", body)
 	}
 	if *app.Section != "Appendix" || strings.Contains(joined(blocks), "LEAK") {
 		t.Fatalf("references not skipped: %+v", blocks)

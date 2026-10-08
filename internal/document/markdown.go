@@ -83,43 +83,21 @@ func markdown(ctx context.Context, source []byte) ([]model.Block, error) {
 		}
 		first := 1 + strings.Count(string(source[:start.offset]), "\n")
 		lines := strings.Split(string(source[start.offset:end]), "\n")
-		// Display equations ($$ lines) get their own blocks: LaTeX merged
-		// into prose dilutes its embedding.
-		kinds := make([]string, len(lines))
-		math := false
+		// One block per section, trimmed of blank lines at its ends.
+		s, last := -1, -1
 		for j := range lines {
 			lines[j] = mdLine(lines[j])
-			t := strings.TrimSpace(lines[j])
-			if math {
-				kinds[j] = "equation"
-				math = !strings.Contains(t, "$$")
-			} else if strings.HasPrefix(t, "$$") {
-				kinds[j] = "equation"
-				math = len(t) < 4 || !strings.HasSuffix(t, "$$")
+			if strings.TrimSpace(lines[j]) != "" {
+				if s < 0 {
+					s = j
+				}
+				last = j
 			}
 		}
-		// Each block is a run of one kind, trimmed of blank lines at its ends.
-		s, last := -1, -1
-		flush := func() {
-			if s >= 0 {
-				a, z := first+s, first+last
-				blocks = append(blocks, model.Block{Text: strings.Join(lines[s:last+1], "\n"), Section: start.section, LineStart: &a, LineEnd: &z, Kind: kinds[s]})
-			}
-			s = -1
+		if s >= 0 {
+			a, z := first+s, first+last
+			blocks = append(blocks, model.Block{Text: strings.Join(lines[s:last+1], "\n"), Section: start.section, LineStart: &a, LineEnd: &z})
 		}
-		for j, line := range lines {
-			if kinds[j] == "" && strings.TrimSpace(line) == "" {
-				continue
-			}
-			if s >= 0 && kinds[s] != kinds[j] {
-				flush()
-			}
-			if s < 0 {
-				s = j
-			}
-			last = j
-		}
-		flush()
 	}
 	return blocks, nil
 }

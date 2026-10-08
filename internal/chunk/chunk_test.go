@@ -92,14 +92,14 @@ func TestMergeJoinsParagraphsWithinSectionAndPage(t *testing.T) {
 		{Text: "   "},
 		{Text: "next page", Section: &a, PageStart: &two, PageEnd: &two},
 		{Text: "next section", Section: &b, PageStart: &two, PageEnd: &two},
-		{Text: "$$x$$", Section: &b, PageStart: &two, PageEnd: &two, Kind: "equation"},
-		{Text: "$$y$$", Section: &b, PageStart: &two, PageEnd: &two, Kind: "equation"},
-		{Text: "after equations", Section: &b, PageStart: &two, PageEnd: &two},
+		{Text: "x := 1", Section: &b, PageStart: &two, PageEnd: &two, Kind: "code"},
+		{Text: "y := 2", Section: &b, PageStart: &two, PageEnd: &two, Kind: "code"},
+		{Text: "after code", Section: &b, PageStart: &two, PageEnd: &two},
 		{Text: "unpaged"},
 		{Text: "unpaged too"},
 	}
 	got := Merge(blocks)
-	want := []string{"first\n\nsecond", "next page", "next section", "$$x$$\n\n$$y$$", "after equations", "unpaged\n\nunpaged too"}
+	want := []string{"first\n\nsecond", "next page", "next section", "x := 1\n\ny := 2", "after code", "unpaged\n\nunpaged too"}
 	if len(got) != len(want) {
 		t.Fatalf("%+v", got)
 	}
@@ -198,5 +198,33 @@ func TestSplitsKeepFormulasWhole(t *testing.T) {
 	whole("Legacy", contents)
 	if spans := mathSpans([]rune(`price \$5 and $a$ then $$b$$`)); len(spans) != 2 {
 		t.Fatalf("spans=%v", spans)
+	}
+	long := "$$" + strings.Repeat(`\mathbf{H} + `, 250) + "$$"
+	if spans := mathSpans([]rune(long)); len(spans) != 1 || spans[0].end != len([]rune(long)) {
+		t.Fatalf("long display formula not whole: %v", spans)
+	}
+}
+
+// The ALPHA/other embedding gap falls right before the formula; the cut must
+// move so "we have" stays with its formula.
+func TestSemanticKeepsFormulaWithLeadIn(t *testing.T) {
+	s := strings.Join([]string{
+		"ALPHA_ONE " + strings.Repeat("apples ", 45) + ".",
+		"ALPHA_TWO " + strings.Repeat("orchards ", 40) + "we have",
+		"$$ y = Hx + n $$",
+		"BETA_ONE " + strings.Repeat("circuits ", 40) + ".",
+		"BETA_TWO " + strings.Repeat("voltage ", 40) + ".",
+	}, "\n")
+	chunks, e := Semantic(context.Background(), []model.Block{{Text: s}}, fake{})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("no split: %+v", chunks)
+	}
+	for _, c := range chunks {
+		if strings.Contains(c.Content, "$$") != strings.Contains(c.Content, "we have") {
+			t.Fatalf("formula split from its lead-in: %q", c.Content)
+		}
 	}
 }
