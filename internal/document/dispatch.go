@@ -218,6 +218,61 @@ func Parse(ctx context.Context, path string) (model.Document, error) {
 	return d, err
 }
 
+// FigureChunks maps the indexes of chunks, the document's indexed text in
+// order, to the absolute paths of the figure images they hold. Blocks are
+// located in the chunks as alignPages locates Markdown in a page export, so a
+// caption cut by a chunk boundary still lands; a figure whose caption is too
+// short to locate, such as "(a)", goes with the last block located before it.
+// Images outside the document's folder are dropped, and a document whose text
+// no longer matches its chunks gets none.
+// ponytail: MinerU content lists only; middle JSON and Markdown image links
+// would need their own image paths.
+func FigureChunks(ctx context.Context, path string, chunks []string) (map[int][]string, error) {
+	if !IsMinerUFile(path) || len(chunks) == 0 {
+		return nil, nil
+	}
+	b, err := readFile(path)
+	if err != nil {
+		return nil, err
+	}
+	blocks, err := ParseMinerU(ctx, b)
+	if err != nil {
+		return nil, err
+	}
+	if fix, err := fixes(path); err != nil {
+		return nil, err
+	} else if fix != nil {
+		if blocks, err = applyFixes(blocks, fix); err != nil {
+			return nil, err
+		}
+	}
+	ref := make([]model.Block, len(chunks))
+	for i, text := range chunks {
+		n := i + 1 // alignPages reports 0 for "not found"
+		ref[i] = model.Block{Text: text, PageStart: &n, PageEnd: &n}
+	}
+	found, err := alignPages(blocks, ref)
+	if err != nil {
+		return nil, nil
+	}
+	out := map[int][]string{}
+	last := -1
+	for i, bl := range blocks {
+		if found[i][1] > 0 {
+			last = found[i][1] - 1
+		}
+		if last < 0 {
+			continue
+		}
+		for _, rel := range bl.Images {
+			if img, err := localContent(filepath.Dir(path), filepath.FromSlash(rel)); err == nil {
+				out[last] = append(out[last], img)
+			}
+		}
+	}
+	return out, ctx.Err()
+}
+
 func parse(ctx context.Context, path string) (model.Document, error) {
 	if err := ctx.Err(); err != nil {
 		return model.Document{}, err

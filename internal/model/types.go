@@ -11,6 +11,9 @@ type Block struct {
 	LineEnd   *int    `json:"lineEnd"`
 	// Kind separates blocks Merge must not join, e.g. "code" from prose.
 	Kind string `json:"kind,omitempty"`
+	// Images are figure files relative to the document, not indexed: a
+	// figure's own, plus those of captionless figures that follow it.
+	Images []string `json:"-"`
 }
 
 type Document struct {

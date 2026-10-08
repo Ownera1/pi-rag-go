@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Ownera1/rag-go/internal/document"
 	"github.com/Ownera1/rag-go/internal/model"
 )
 
@@ -46,6 +47,8 @@ type Passage struct {
 	PageEnd   *int   `json:"pageEnd,omitempty"`
 	Section   string `json:"section,omitempty"`
 	Content   string `json:"content"`
+	// Images are figure files whose captions this passage contains.
+	Images []string `json:"images,omitempty"`
 }
 
 // ReadResult holds the passages read. When Truncated, Next is the index to
@@ -145,7 +148,19 @@ func (c *Core) Read(ctx context.Context, opts ReadOptions) (ReadResult, error) {
 		}
 		out.Passages = append(out.Passages, p)
 	}
-	return out, nil
+	if len(out.Passages) > 0 {
+		// Best effort: a source that no longer parses leaves passages as
+		// indexed, without images.
+		texts := make([]string, len(chunks))
+		for i, ch := range chunks {
+			texts[i] = ch.Content
+		}
+		images, _ := document.FigureChunks(ctx, doc.Path, texts)
+		for i := range out.Passages {
+			out.Passages[i].Images = images[out.Passages[i].Index]
+		}
+	}
+	return out, ctx.Err()
 }
 
 // Outline lists a document's sections as chunk ranges for Read.
