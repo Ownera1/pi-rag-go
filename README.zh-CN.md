@@ -142,7 +142,7 @@ rag mcp --transport http --listen 127.0.0.1:7331   # 前台运行，只读 HTTP
 
 本地可写 MCP 提供 `rag_query`、`rag_status`、`rag_list_documents`、`rag_sync`、`rag_rebuild`、`rag_zotero_sync`、`rag_zotero_match` 和 `rag_zotero_link`。查询参数支持 `query`、`mode`、`top_k`、`candidate_top_k`、`alpha`、`disable_rerank`、`require_rerank`；`disable_sync=true` 禁用正文自动同步，`filter` 在召回前应用缓存的 Zotero metadata 条件。
 
-不带 `--workspace` 时，stdio `rag mcp` 可在任意目录启动，每次调用时确定工作区：优先使用可选的 `workspace` 工具参数（项目目录或其中任意子目录），否则使用 Agent 的工作目录。在工作区之外调用会提示如何初始化。带 `--workspace` 启动的服务和所有 HTTP 服务只服务一个工作区，拒绝其他工作区。
+不带 `--workspace` 时，stdio `rag mcp` 可在任意目录启动，每次调用都按必填的 `workspace` 工具参数确定工作区：Agent 当前项目的绝对路径，或其中任意子目录。调用不携带工作目录，而服务自身的目录在 Agent 切换项目后仍停留在启动位置，因此不设默认值，缺省或相对路径会被拒绝。在工作区之外调用会提示如何初始化。带 `--workspace` 启动的服务和所有 HTTP 服务只服务一个工作区：此时 `workspace` 可省略，便于不知道本机路径的远程客户端调用；若传入则必须是绝对路径且位于该工作区内。
 
 只读 stdio 和所有 HTTP 服务仅暴露 query/status/list，拒绝写工具并关闭自动同步。查询仍可调用配置的 query embedding 或 reranker。HTTP 仅监听 loopback，保留 Host/Origin 校验，将地址打印到 stderr；不指定端口时使用临时端口。远程隧道可接入只读 stdio 或可选 HTTP 服务，隧道安装与账号配置由外部工具管理。
 

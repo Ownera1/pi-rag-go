@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -14,15 +15,28 @@ import (
 	"github.com/Ownera1/rag-go/pkg/rag"
 )
 
-// resolve opens the workspace a tool call targets; dir is the optional
-// workspace argument. done releases the workspace after the call.
+// resolve opens the workspace a tool call targets; dir is the workspace
+// argument. done releases the workspace after the call.
 type resolve func(dir string) (core *rag.Core, done func(), err error)
 
-// New serves one fixed workspace.
+// absolute rejects relative workspace arguments: they would resolve against
+// the directory this server was launched in, not the caller's project.
+func absolute(dir string) error {
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("workspace must be the absolute path of the current project, got %q", dir)
+	}
+	return nil
+}
+
+// New serves one fixed workspace. Remote clients cannot know its local path,
+// so the workspace argument is optional and only checked when given.
 func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 	root := core.WorkspaceDir()
 	return serve(func(dir string) (*rag.Core, func(), error) {
 		if dir != "" {
+			if err := absolute(dir); err != nil {
+				return nil, nil, err
+			}
 			found, err := workspace.DiscoverFrom(dir)
 			if err != nil {
 				return nil, nil, err
@@ -35,19 +49,19 @@ func New(core *rag.Core, lifecycle ...context.Context) *mcp.Server {
 	}, core.ReadOnly(), lifecycle...)
 }
 
-// NewDynamic resolves the workspace on every call from the workspace argument
-// or the server's working directory, so one registration serves every project.
+// NewDynamic resolves the workspace argument on every call, so one
+// registration serves every project. The argument is required: calls carry no
+// working directory, and the server's own stays where it was launched after
+// the agent moves to another project, so a default could silently search the
+// wrong workspace.
 func NewDynamic(readOnly bool, lifecycle ...context.Context) *mcp.Server {
 	return serve(func(dir string) (*rag.Core, func(), error) {
-		var root string
-		var err error
-		if dir == "" {
-			root, err = workspace.Discover("")
-		} else {
-			root, err = workspace.DiscoverFrom(dir)
+		if err := absolute(dir); err != nil {
+			return nil, nil, err
 		}
+		root, err := workspace.DiscoverFrom(dir)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%w (pass the project directory as workspace)", err)
+			return nil, nil, err
 		}
 		core, err := rag.Open(rag.Options{WorkspaceDir: root, ReadOnly: readOnly})
 		if err != nil {
@@ -77,7 +91,7 @@ func serve(open resolve, readOnly bool, lifecycle ...context.Context) *mcp.Serve
 		})
 	}
 	type queryIn struct {
-		Workspace     string              `json:"workspace,omitempty" jsonschema:"absolute path of the project, or any directory inside it; defaults to the directory the agent was started in"`
+		Workspace     string              `json:"workspace,omitempty" jsonschema:"absolute path of the current project, or any directory inside it; required unless this server is pinned to one project with --workspace"`
 		Filter        *rag.MetadataFilter `json:"filter,omitempty"`
 		Query         string              `json:"query"`
 		TopK          int                 `json:"top_k,omitempty"`
@@ -113,7 +127,7 @@ func serve(open resolve, readOnly bool, lifecycle ...context.Context) *mcp.Serve
 	})
 
 	type workspaceIn struct {
-		Workspace string `json:"workspace,omitempty" jsonschema:"absolute path of the project, or any directory inside it; defaults to the directory the agent was started in"`
+		Workspace string `json:"workspace,omitempty" jsonschema:"absolute path of the current project, or any directory inside it; required unless this server is pinned to one project with --workspace"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "rag_status",
@@ -173,7 +187,7 @@ func serve(open resolve, readOnly bool, lifecycle ...context.Context) *mcp.Serve
 			return nil, r, e
 		})
 		type linkIn struct {
-			Workspace string              `json:"workspace,omitempty" jsonschema:"absolute path of the project, or any directory inside it; defaults to the directory the agent was started in"`
+			Workspace string              `json:"workspace,omitempty" jsonschema:"absolute path of the current project, or any directory inside it; required unless this server is pinned to one project with --workspace"`
 			Path      string              `json:"path"`
 			Reference rag.ZoteroReference `json:"reference"`
 		}
