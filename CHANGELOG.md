@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `rag_outline` and `rag_read` drop the title heading every section shares, such as the paper title MinerU puts above all headings: sections read `I. INTRODUCTION` instead of `<full title> / I. INTRODUCTION`, and the title's own section keeps its name. On three real papers outlines shrank 37–46% with identical chunk ranges.
+
 ## v0.6.0 (2026-10-08)
 
 Existing v0.5 indexes report `rebuild required`; run `rag rebuild` once after upgrading. MCP clients and scripts that read `hits[].metadata` or the `rag_list_documents` path list need the changes marked Breaking below.

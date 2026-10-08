@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/Ownera1/rag-go/internal/model"
 )
 
 // paperFixture indexes a MinerU paper over four pages and a second paper.
@@ -21,14 +23,15 @@ func paperFixture(t *testing.T) (*Core, DocumentInfo, DocumentInfo) {
 		items = append(items, fmt.Sprintf(`{"type":%q,"text":%q,"page_idx":%d%s}`, typ, text, page, lvl))
 	}
 	words := func(tag string) string { return strings.Repeat(tag+" evidence words ", 40) }
-	add(0, "text", "Introduction", 1)
+	add(0, "text", "Alpha Title", 1)
+	add(0, "text", "Introduction", 2)
 	add(0, "text", words("intro0"), 0)
 	add(1, "text", words("intro1"), 0)
-	add(1, "text", "Method", 1)
+	add(1, "text", "Method", 2)
 	add(1, "text", words("method1"), 0)
 	add(2, "equation", `$$y = Hx \tag{7}$$`, 0)
 	add(2, "text", words("method2"), 0)
-	add(3, "text", "Results", 1)
+	add(3, "text", "Results", 2)
 	add(3, "text", words("results3"), 0)
 	sourceFile(t, docPath(c, "Alpha paper/alpha_content_list.json"), []byte("["+strings.Join(items, ",")+"]"))
 	sourceFile(t, docPath(c, "Beta paper/beta.txt"), []byte("beta evidence words and \\tag{7} elsewhere"))
@@ -94,10 +97,11 @@ func TestReadOutlineAndContinuation(t *testing.T) {
 		next = s.To + 1
 		names = append(names, s.Section)
 	}
-	if next != out.Chunks || strings.Join(names, "|") != "Introduction|Method|Results" {
+	// The title heading every section sits under is named once, not repeated.
+	if next != out.Chunks || strings.Join(names, "|") != "Alpha Title|Introduction|Method|Results" {
 		t.Fatalf("sections %q cover %d of %d", names, next, out.Chunks)
 	}
-	method := out.Sections[1]
+	method := out.Sections[2]
 	r, err := c.Read(ctx, ReadOptions{Document: alpha.ID, From: &method.From, To: &method.To})
 	if err != nil || r.Passages[0].Section != "Method" || len(r.Passages) != method.To-method.From+1 {
 		t.Fatalf("section read %+v %v", r, err)
@@ -123,6 +127,27 @@ func TestReadOutlineAndContinuation(t *testing.T) {
 		if *p.PageEnd < 3 || *p.PageStart > 3 {
 			t.Fatalf("passage outside page 3: %+v", p)
 		}
+	}
+}
+
+func TestTitlePrefix(t *testing.T) {
+	chunks := func(sections ...string) []model.Chunk {
+		out := []model.Chunk{}
+		for _, s := range sections {
+			out = append(out, model.Chunk{Section: &s})
+		}
+		return append(out, model.Chunk{})
+	}
+	for want, in := range map[string][]model.Chunk{
+		"T / ": chunks("T", "T / A", "T / A / x", "T / B"),
+		"":     chunks("A", "B / x"),
+	} {
+		if got := titlePrefix(in); got != want {
+			t.Errorf("titlePrefix(%v) = %q, want %q", in, got, want)
+		}
+	}
+	if got := titlePrefix(chunks("T", "T")); got != "" {
+		t.Errorf("unnested title stripped: %q", got)
 	}
 }
 
