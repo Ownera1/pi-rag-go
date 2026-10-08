@@ -48,7 +48,7 @@ workspace 需要已经执行过 `rag init`。metadata 同步可以先于正文�
 
 列表没有返回的对象使用软删除。Zotero 9 可能让文献继续引用已删除的 collection；客户端补读这些集合，404 则保留删除记录。关系仍可追溯，但删除的集合不参与过滤。
 
-手工锁定关联不会被自动匹配覆盖或删除。父条目被删除后，检索结果的 `metadata.orphan` 为 true，status/sync 的 `orphans` 会提示受影响的 document key；恢复条目可自动恢复原来的关联。`rag zotero links` 输出关联及路径，方便核对和备份。
+手工锁定关联不会被自动匹配覆盖或删除。父条目被删除后，检索结果中该文档的 `documents[<id>].metadata.orphan` 为 true，status/sync 的 `orphans` 会提示受影响的 document key；恢复条目可自动恢复原来的关联。`rag zotero links` 输出关联及路径，方便核对和备份。
 
 Zotero 9 的库版本不能检测所有本地编辑，分页核验也不是服务器提供的事务快照。如果同步期间持续修改条目，应在操作结束后再同步一次。正文同步和 metadata 同步是独立操作：`rag sync` 更新正文，`rag zotero sync` 更新 Zotero 快照。普通 query 使用已缓存的 metadata，并返回 `metadataSyncedAt`。
 
@@ -127,7 +127,7 @@ Go API 使用 `QueryOptions.Filter`。MCP `rag_query` 示例：
 }
 ```
 
-命中结果的 `metadata` 包括 title、abstract、date、year、publication、DOI、citation key、按顺序保存的 creators、带类型的 tags、collection keys 和关联状态。机构作者使用 `name`；个人作者使用 `firstName`/`lastName`。元数据缺失的普通文档仍能通过不带 filter 的正文检索返回。
+检索结果顶层的 `documents` 以文档 id 为键，每篇文档只出现一次；每个命中的 `document` 字段指向其中一项。每项含 `version`，已关联 Zotero 时另有 `metadata`，包括 title、abstract、date、year、publication、DOI、citation key、按顺序保存的 creators、带类型的 tags、collection keys 和关联状态。机构作者使用 `name`；个人作者使用 `firstName`/`lastName`。元数据缺失的普通文档仍能通过不带 filter 的正文检索返回。
 
 本地可写 MCP 增加 `rag_zotero_sync`、`rag_zotero_match`、`rag_zotero_link`；`rag_status` 包含 catalog 状态。只读 stdio 和 HTTP 仍只暴露 query/status/list，不提供写入或启动 Zotero 的工具。
 

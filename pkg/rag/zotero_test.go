@@ -70,7 +70,7 @@ func TestMetadataFiltersLocksMoveRebuildAndReadOnly(t *testing.T) {
 	}
 	for _, mode := range []string{"bm25", "vector", "hybrid"} {
 		q, err := c.Query(ctx, "signal", QueryOptions{Mode: mode, DisableSync: true, Filter: &MetadataFilter{Tags: []string{"ISAC"}, Collections: []string{"COLLECT1"}}})
-		if err != nil || len(q.Hits) != 1 || q.Hits[0].Chunk.Path != second || q.Hits[0].Metadata.ItemKey != "PAPER002" || q.MetadataSyncedAt == "" {
+		if err != nil || len(q.Hits) != 1 || q.Hits[0].Chunk.Path != second || q.Documents[q.Hits[0].Document].Metadata == nil || q.Documents[q.Hits[0].Document].Metadata.ItemKey != "PAPER002" || q.MetadataSyncedAt == "" {
 			t.Fatalf("%s filter: %+v %v", mode, q, err)
 		}
 		q, err = c.Query(ctx, "信道", QueryOptions{Mode: "bm25", DisableSync: true, Filter: &MetadataFilter{Tags: []string{"ISAC"}}})
@@ -94,8 +94,11 @@ func TestMetadataFiltersLocksMoveRebuildAndReadOnly(t *testing.T) {
 	if err != nil || len(q.Hits) != 2 || p.calls.Load() != calls {
 		t.Fatalf("metadata refresh re-embedded: %+v %v", q, err)
 	}
+	if len(q.Documents) != 2 {
+		t.Fatalf("want one entry per document: %+v", q.Documents)
+	}
 	for _, h := range q.Hits {
-		if h.Metadata == nil || h.Metadata.Title != "Updated local title" {
+		if m := q.Documents[h.Document].Metadata; m == nil || m.Title != "Updated local title" {
 			t.Fatal("metadata not enriched")
 		}
 	}
@@ -117,7 +120,8 @@ func TestMetadataFiltersLocksMoveRebuildAndReadOnly(t *testing.T) {
 	found := false
 	for _, h := range q.Hits {
 		if h.Chunk.Path == first {
-			found = h.Metadata.Locked && h.Metadata.MatchMethod == "manual"
+			m := q.Documents[h.Document].Metadata
+			found = m != nil && m.Locked && m.MatchMethod == "manual"
 		}
 	}
 	if !found {
@@ -157,7 +161,7 @@ func TestMetadataFiltersLocksMoveRebuildAndReadOnly(t *testing.T) {
 		t.Fatal("old-index hydration failed")
 	}
 	for _, h := range q.Hits {
-		if h.Metadata == nil {
+		if q.Documents[h.Document].Metadata == nil {
 			t.Fatal("hydration lost metadata")
 		}
 	}

@@ -92,7 +92,7 @@ func transient(err error) bool {
 func (c *session) query(ctx context.Context, query string, opts QueryOptions, plan queryPlan) (out QueryResult, err error) {
 	started := time.Now()
 	defer func() { out.ElapsedMs = float64(time.Since(started).Microseconds()) / 1000 }()
-	out = QueryResult{Query: query, Hits: []model.Hit{}, Method: plan.mode}
+	out = QueryResult{Query: query, Documents: map[string]HitDocument{}, Hits: []model.Hit{}, Method: plan.mode}
 	if err := ctx.Err(); err != nil {
 		return out, err
 	}
@@ -138,7 +138,7 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 		for _, id := range ids {
 			out.Hits = append(out.Hits, model.Hit{Chunk: chunks[id]})
 		}
-		return out, c.enrichMetadata(ctx, out.Hits)
+		return out, c.describeHits(ctx, &out)
 	}
 	recall := topK
 	if reranker != nil {
@@ -305,7 +305,7 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 		hits = hits[:topK]
 	}
 	out.Hits = hits
-	if err = c.enrichMetadata(ctx, out.Hits); err != nil {
+	if err = c.describeHits(ctx, &out); err != nil {
 		return out, err
 	}
 	return out, nil

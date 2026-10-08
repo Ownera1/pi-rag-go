@@ -26,6 +26,7 @@ type Block = model.Block
 type Document = model.Document
 type Chunk = model.Chunk
 type Hit = model.Hit
+type HitDocument = model.HitDocument
 type QueryOptions = model.QueryOptions
 type QueryResult = model.QueryResult
 type QueryUsage = model.QueryUsage

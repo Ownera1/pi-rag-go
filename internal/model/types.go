@@ -53,13 +53,15 @@ type Chunk struct {
 	Heading string `json:"-"`
 }
 
+// Hit is a retrieved chunk. Document is its document's id, a key of
+// QueryResult.Documents.
 type Hit struct {
-	Metadata *ZoteroMetadata `json:"metadata,omitempty"`
-	Chunk    Chunk           `json:"chunk"`
-	BM25     float64         `json:"bm25"`
-	Vector   float64         `json:"vector"`
-	Hybrid   float64         `json:"hybrid"`
-	Rerank   *float64        `json:"rerank,omitempty"`
+	Document string   `json:"document"`
+	Chunk    Chunk    `json:"chunk"`
+	BM25     float64  `json:"bm25"`
+	Vector   float64  `json:"vector"`
+	Hybrid   float64  `json:"hybrid"`
+	Rerank   *float64 `json:"rerank,omitempty"`
 }
 
 type QueryOptions struct {
@@ -82,11 +84,20 @@ type QueryResult struct {
 	Sync             *IndexResult `json:"sync,omitempty"`
 	SyncError        string       `json:"syncError,omitempty"`
 	Query            string       `json:"query"`
-	Hits             []Hit        `json:"hits"`
-	Method           string       `json:"method"`
-	Degraded         string       `json:"degraded,omitempty"`
-	ElapsedMs        float64      `json:"elapsedMs"`
-	Usage            QueryUsage   `json:"usage"`
+	// Documents describes each hit's document once, keyed by Hit.Document.
+	Documents map[string]HitDocument `json:"documents"`
+	Hits      []Hit                  `json:"hits"`
+	Method    string                 `json:"method"`
+	Degraded  string                 `json:"degraded,omitempty"`
+	ElapsedMs float64                `json:"elapsedMs"`
+	Usage     QueryUsage             `json:"usage"`
+}
+
+// HitDocument carries a document's version and, when it is linked to Zotero,
+// its metadata, abstract included.
+type HitDocument struct {
+	Version  string          `json:"version"`
+	Metadata *ZoteroMetadata `json:"metadata,omitempty"`
 }
 
 // Token counts are estimates; calls count logical provider calls, excluding retries.

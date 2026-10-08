@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -153,6 +154,65 @@ func TestLocalMCPToolsAndCancellation(t *testing.T) {
 		t.Fatal("MCP shutdown blocked")
 	}
 }
+
+type fakeEmbedding struct{}
+
+func (fakeEmbedding) Model() string   { return "fake" }
+func (fakeEmbedding) Dimensions() int { return 2 }
+func (fakeEmbedding) EmbedQuery(context.Context, string) ([]float32, error) {
+	return []float32{1, 0}, nil
+}
+func (fakeEmbedding) EmbedDocuments(_ context.Context, in []string) ([][]float32, error) {
+	out := make([][]float32, len(in))
+	for i := range out {
+		out[i] = []float32{1, 0}
+	}
+	return out, nil
+}
+
+// Query output must validate against its schema for documents without Zotero
+// metadata, and rag_read must expand a hit.
+func TestQueryAndReadOutputValidate(t *testing.T) {
+	root := t.TempDir()
+	testCore(t, root, false)
+	cfg := rag.DefaultConfig()
+	cfg.Documents = "documents"
+	cfg.Embedding.Model, cfg.Embedding.Dimensions = "fake", 2
+	cfg.Chunking.Mode = "legacy"
+	if err := workspace.AtomicJSON(filepath.Join(workspace.Store(root), "config.json"), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "documents", "note.txt"), []byte("unlinked evidence"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	core, err := rag.Open(rag.Options{WorkspaceDir: root, Embedder: fakeEmbedding{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.Close()
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() { _ = New(core).Run(ctx, serverTransport) }()
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	r, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "rag_query", Arguments: map[string]any{"query": "evidence", "mode": "bm25"}})
+	if err != nil || r.IsError {
+		t.Fatalf("query: %+v %v", r, err)
+	}
+	b, _ := json.Marshal(r.StructuredContent)
+	var q rag.QueryResult
+	if err = json.Unmarshal(b, &q); err != nil || len(q.Hits) != 1 || len(q.Documents) != 1 || q.Documents[q.Hits[0].Document].Metadata != nil {
+		t.Fatalf("query output %s %v", b, err)
+	}
+	r, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "rag_read", Arguments: map[string]any{"around": q.Hits[0].Chunk.ID}})
+	if err != nil || r.IsError || !strings.Contains(fmt.Sprint(r.StructuredContent), "unlinked evidence") {
+		t.Fatalf("read: %+v %v", r, err)
+	}
+}
+
 func TestHTTPHostOriginBoundary(t *testing.T) {
 	handler := Handler(New(testCore(t, t.TempDir(), true)))
 	for _, c := range []struct{ host, origin string }{{"attacker.example", ""}, {"8.8.8.8:7331", ""}, {"127.0.0.1:7331", "https://attacker.example"}} {
