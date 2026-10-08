@@ -131,7 +131,7 @@ func (c *Core) Read(ctx context.Context, opts ReadOptions) (ReadResult, error) {
 	if err != nil {
 		return out, err
 	}
-	tokens, section := 0, ""
+	tokens, section, prefix := 0, "", titlePrefix(chunks)
 	for i := lo; i <= hi; i++ {
 		ch := chunks[i]
 		tokens += ch.Tokens
@@ -140,7 +140,7 @@ func (c *Core) Read(ctx context.Context, opts ReadOptions) (ReadResult, error) {
 			break
 		}
 		p := Passage{Index: ch.ChunkIndex, PageStart: ch.PageStart, PageEnd: ch.PageEnd, Content: ch.Content}
-		if sec := deref(ch.Section); sec != section || i == lo {
+		if sec := strings.TrimPrefix(deref(ch.Section), prefix); sec != section || i == lo {
 			p.Section, section = sec, sec
 		}
 		out.Passages = append(out.Passages, p)
@@ -160,12 +160,12 @@ func (c *Core) Outline(ctx context.Context, document string) (Outline, error) {
 		return Outline{}, err
 	}
 	out := Outline{DocumentInfo: doc, Chunks: len(chunks), Sections: []Section{}}
-	seen := map[string]int{}
+	seen, prefix := map[string]int{}, titlePrefix(chunks)
 	for i, ch := range chunks {
 		if ch.PageEnd != nil {
 			out.Pages = max(out.Pages, *ch.PageEnd)
 		}
-		sec := deref(ch.Section)
+		sec := strings.TrimPrefix(deref(ch.Section), prefix)
 		if n := len(out.Sections); n > 0 && out.Sections[n-1].Section == sec {
 			last := &out.Sections[n-1]
 			last.To = i
@@ -181,6 +181,29 @@ func (c *Core) Outline(ctx context.Context, document string) (Outline, error) {
 		out.Sections = append(out.Sections, Section{N: seen[sec], Section: sec, From: i, To: i, PageStart: ch.PageStart, PageEnd: ch.PageEnd})
 	}
 	return out, nil
+}
+
+// titlePrefix returns "<heading> / " when every section sits under one top
+// heading, usually the paper title, so outline and read drop that repeat; the
+// title's own section keeps its name.
+func titlePrefix(chunks []model.Chunk) string {
+	top, nested := "", false
+	for _, ch := range chunks {
+		head, _, sub := strings.Cut(deref(ch.Section), " / ")
+		if head == "" {
+			continue
+		}
+		if top == "" {
+			top = head
+		} else if head != top {
+			return ""
+		}
+		nested = nested || sub
+	}
+	if top == "" || !nested {
+		return ""
+	}
+	return top + " / "
 }
 
 func deref(s *string) string {
