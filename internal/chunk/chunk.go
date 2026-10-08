@@ -41,7 +41,7 @@ func isCJK(r rune) bool {
 }
 
 // Version identifies chunk boundary behavior for the processing fingerprint.
-const Version = "merged-blocks-v2"
+const Version = "merged-blocks-v3"
 
 func sameInt(a, b *int) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
 
@@ -125,9 +125,10 @@ func sentenceEnd(r []rune, i int) bool {
 		strings.ContainsRune(".!?", r[i]) && i+1 < len(r) && unicode.IsSpace(r[i+1])
 }
 
-// maxMath bounds a kept-whole formula, so a stray "$" in code or prose cannot
-// push a cut far past its limit.
-// ponytail: a formula may overrun a chunk's token limit by up to maxMath runes.
+// maxMath bounds a kept-whole inline formula, so a stray "$" in code or prose
+// cannot push a cut far past its limit; display ($$) formulas get 8x, since
+// one in eight MinerU equations runs past 512 runes and a few past 2048.
+// ponytail: a formula may overrun a chunk's token limit by up to 8*maxMath runes.
 const maxMath = 512
 
 // mathSpans returns the rune ranges of $…$ and $$…$$ formulas, which every
@@ -143,11 +144,11 @@ func mathSpans(r []rune) []unit {
 		if r[i] != '$' {
 			continue
 		}
-		delim := 1
+		delim, limit := 1, maxMath
 		if i+1 < len(r) && r[i+1] == '$' {
-			delim = 2
+			delim, limit = 2, 8*maxMath
 		}
-		for j := i + delim; j < len(r) && j-i <= maxMath; j++ {
+		for j := i + delim; j < len(r) && j-i <= limit; j++ {
 			if r[j] == '\\' {
 				j++
 				continue
@@ -625,6 +626,10 @@ func Semantic(ctx context.Context, blocks []model.Block, provider model.Embeddin
 					continue
 				}
 				if span(cursor, last) <= cfg.Chunking.SemanticMax && span(end+1, last) < cfg.Chunking.SemanticMin {
+					continue
+				}
+				// A display formula stays with the sentence that introduces it.
+				if strings.HasPrefix(texts[sp.first+end+1], "$$") {
 					continue
 				}
 				score := cosine(vectors[end], vectors[end+1])
