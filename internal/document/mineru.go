@@ -79,10 +79,64 @@ func linesText(item map[string]any) string {
 	return value
 }
 
+// tableText keeps a table's rows as lines and its cells as " | "-separated
+// columns, so a row still pairs a method with its values. Input without rows
+// falls back to its bare text.
+// ponytail: rowspan/colspan cells are not repeated, so a spanned column shifts left.
+func tableText(s string) string {
+	root, err := html.Parse(strings.NewReader(s))
+	if err != nil {
+		return html.UnescapeString(htmlTag.ReplaceAllString(s, " "))
+	}
+	rows := []string{}
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "tr" {
+			cells := []string{}
+			for c := n.FirstChild; c != nil; c = c.NextSibling {
+				if c.Type == html.ElementNode && (c.Data == "td" || c.Data == "th") {
+					cells = append(cells, normalize(inlineHTML(c)))
+				}
+			}
+			rows = append(rows, strings.Join(cells, " | "))
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(root)
+	if len(rows) == 0 {
+		return html.UnescapeString(htmlTag.ReplaceAllString(s, " "))
+	}
+	return strings.Join(rows, "\n")
+}
+
+// normalizeLines normalizes each line and drops blank ones, keeping a
+// table's rows apart.
+func normalizeLines(s string) string {
+	lines := []string{}
+	for _, l := range strings.Split(s, "\n") {
+		if l = normalize(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// numberLabel matches a heading that is only a number such as "A." or "2.1.".
+var numberLabel = regexp.MustCompile(`^(?:[0-9]+|[A-Z]|[IVXLC]+)(?:\.[0-9]+)*\.$`)
+
+// sentenceHeading reports a heading that ends a sentence. MinerU tags run-in
+// lines such as "Proof: See Appendix A." as headings, and every later block
+// would inherit one as its section; real headings do not end with a period.
+func sentenceHeading(s string) bool {
+	return (strings.HasSuffix(s, ".") || strings.HasSuffix(s, "。")) && !numberLabel.MatchString(s)
+}
+
 // figureText returns a figure, chart or table's caption, footnote and, for a
-// table, its cell text. content_list v1 keeps these on the item, v2 under
+// table, its rows. content_list v1 keeps these on the item, v2 under
 // "content".
-// ponytail: table cells are flattened to words; row/column structure is lost.
 func figureText(item map[string]any, typ string) string {
 	src := item
 	if c, ok := item["content"].(map[string]any); ok {
@@ -106,7 +160,7 @@ func figureText(item map[string]any, typ string) string {
 	if typ == "table" {
 		for _, key := range []string{"table_body", "html"} {
 			if s, ok := src[key].(string); ok {
-				add(html.UnescapeString(htmlTag.ReplaceAllString(s, " ")))
+				add(tableText(s))
 			}
 		}
 	}
@@ -191,7 +245,11 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 				}
 			}
 		case "image", "chart", "table":
-			// Pixels are not indexed; captions and table text are.
+			// Pixels are not indexed; captions and table text are. A table
+			// keeps its own block so its header and rows share a chunk.
+			if typ == "table" {
+				kind = "table"
+			}
 			value = figureText(item, typ)
 			if strings.TrimSpace(value) == "" {
 				value = linesText(item)
@@ -220,9 +278,16 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 			// page_footnote) are skipped, as are types MinerU may add later.
 			return nil
 		}
-		value = normalize(value)
+		if typ == "table" {
+			value = normalizeLines(value)
+		} else {
+			value = normalize(value)
+		}
 		if value == "" {
 			return nil
+		}
+		if level > 0 && sentenceHeading(value) {
+			level = 0
 		}
 		if level > 6 {
 			return errors.New("MinerU heading level exceeds 6")

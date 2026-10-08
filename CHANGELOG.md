@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Existing indexes report `rebuild required`; run `rag rebuild` once after upgrading.
+
+- MinerU headings that end in a period, such as a run-in `Proof: See Appendix A.`, are read as body text. Every later block used to inherit such a line as its section until the next real heading; on six papers this mislabeled 11 chunks, and none of the 121 real headings ends in a period.
+- MinerU tables keep their rows and columns: one line per row, cells separated by ` | `, in a chunk of their own with the caption, so a method stays next to its values. Cells used to be flattened into words, and a table could be split between chunks of surrounding prose.
+
 ## v0.5.2 (2026-10-08)
 
 Existing v0.5 indexes report `rebuild required`; run `rag rebuild` once after upgrading.

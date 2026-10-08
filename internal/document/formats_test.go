@@ -210,12 +210,12 @@ func TestMinerUIndexesCaptionsTablesAndEquations(t *testing.T) {
 		"v1": `[{"type":"text","text":"Results","text_level":1,"page_idx":0},` +
 			`{"type":"image","img_path":"images/a.jpg","image_caption":["Fig. 1. Uplink layout."],"image_footnote":["Drawn to scale."],"page_idx":0},` +
 			`{"type":"chart","chart_caption":["Fig. 2. MSE versus SINR."],"chart_footnote":[],"page_idx":0},` +
-			`{"type":"table","table_caption":["TABLE I Parameters"],"table_body":"<table><tr><td>Carrier &amp; band</td><td>3.5 GHz</td></tr></table>","page_idx":0},` +
+			`{"type":"table","table_caption":["TABLE I Parameters"],"table_body":"<table><tr><th>Parameter</th><th>Value</th></tr><tr><td>Carrier &amp; band</td><td>3.5 GHz</td></tr></table>","page_idx":0},` +
 			`{"type":"equation","text":"$$y = Hx + n$$","text_format":"latex","page_idx":0}]`,
 		"v2": `[[{"type":"title","content":{"title_content":[{"type":"text","content":"Results"}],"level":1}},` +
 			`{"type":"image","content":{"image_source":{"path":"images/a.jpg"},"image_caption":[{"type":"text","content":"Fig. 1. Uplink layout."}],"image_footnote":[{"type":"text","content":"Drawn to scale."}]}},` +
 			`{"type":"chart","content":{"chart_caption":[{"type":"text","content":"Fig. 2. MSE versus SINR."}],"chart_footnote":[]}},` +
-			`{"type":"table","content":{"table_caption":[{"type":"text","content":"TABLE I Parameters"}],"html":"<table><tr><td>Carrier &amp; band</td><td>3.5 GHz</td></tr></table>"}},` +
+			`{"type":"table","content":{"table_caption":[{"type":"text","content":"TABLE I Parameters"}],"html":"<table><tr><th>Parameter</th><th>Value</th></tr><tr><td>Carrier &amp; band</td><td>3.5 GHz</td></tr></table>"}},` +
 			`{"type":"equation_interline","content":{"math_content":"y = Hx + n","math_type":"latex"}}]]`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -225,10 +225,22 @@ func TestMinerUIndexesCaptionsTablesAndEquations(t *testing.T) {
 			}
 			text := joined(blocks)
 			for _, want := range []string{"Fig. 1. Uplink layout.", "Drawn to scale.", "Fig. 2. MSE versus SINR.",
-				"TABLE I Parameters", "Carrier & band 3.5 GHz", "$$y = Hx + n$$"} {
+				"TABLE I Parameters", "Parameter | Value\nCarrier & band | 3.5 GHz", "$$y = Hx + n$$"} {
 				if !strings.Contains(text, want) {
 					t.Fatalf("missing %q in %q", want, text)
 				}
+			}
+			tables := 0
+			for _, b := range blocks {
+				if b.Kind == "table" {
+					tables++
+					if !strings.HasPrefix(b.Text, "TABLE I Parameters\nParameter | Value") {
+						t.Fatalf("table block %q", b.Text)
+					}
+				}
+			}
+			if tables != 1 {
+				t.Fatalf("want one table block, got %d", tables)
 			}
 			if strings.Contains(text, "<td>") || strings.Contains(text, "images/") {
 				t.Fatalf("markup or image path leaked: %q", text)
@@ -239,6 +251,27 @@ func TestMinerUIndexesCaptionsTablesAndEquations(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMinerUSentenceHeadingIsBody(t *testing.T) {
+	source := `[{"type":"text","text":"III. Method","text_level":1,"page_idx":0},` +
+		`{"type":"text","text":"Lemma 1 holds.","page_idx":0},` +
+		`{"type":"text","text":"Proof: See Appendix A.","text_level":1,"page_idx":0},` +
+		`{"type":"text","text":"Next paragraph.","page_idx":0},` +
+		`{"type":"text","text":"A.","text_level":2,"page_idx":0},` +
+		`{"type":"text","text":"PROOF OF LEMMA1","text_level":1,"page_idx":1}]`
+	blocks, err := ParseMinerU(context.Background(), []byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections := []string{}
+	for _, b := range blocks {
+		sections = append(sections, *b.Section)
+	}
+	want := []string{"III. Method", "III. Method", "III. Method", "III. Method", "III. Method / A.", "PROOF OF LEMMA1"}
+	if strings.Join(sections, "|") != strings.Join(want, "|") {
+		t.Fatalf("sections %q, want %q", sections, want)
 	}
 }
 
