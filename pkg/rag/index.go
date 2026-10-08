@@ -323,32 +323,41 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 		wg.Wait()
 		close(done)
 	}()
+	settled := 0
 	for w := range done {
-		if w.err != nil {
-			addFailure(&result, w.path, w.stage, w.err)
-			continue
+		c.settle(ctx, db, &result, w)
+		settled++
+		if c.progress != nil {
+			c.progress(IndexProgress{Done: settled, Total: len(paths), Path: w.path, Result: result})
 		}
-		if w.skip {
-			result.Skipped++
-			continue
-		}
-		stage := "input"
-		hash, e := document.InputFingerprint(ctx, w.path)
-		if e == nil && hash != w.doc.Hash {
-			e = errors.New("document changed during embedding; existing content retained")
-		}
-		if e == nil {
-			stage = "store"
-			e = db.Replace(ctx, w.doc, w.chunks, w.vectors)
-		}
-		if e != nil {
-			addFailure(&result, w.path, stage, e)
-			continue
-		}
-		result.Indexed++
-		result.Chunks += len(w.chunks)
 	}
 	return result
+}
+
+func (c *session) settle(ctx context.Context, db *store.DB, result *IndexResult, w work) {
+	if w.err != nil {
+		addFailure(result, w.path, w.stage, w.err)
+		return
+	}
+	if w.skip {
+		result.Skipped++
+		return
+	}
+	stage := "input"
+	hash, e := document.InputFingerprint(ctx, w.path)
+	if e == nil && hash != w.doc.Hash {
+		e = errors.New("document changed during embedding; existing content retained")
+	}
+	if e == nil {
+		stage = "store"
+		e = db.Replace(ctx, w.doc, w.chunks, w.vectors)
+	}
+	if e != nil {
+		addFailure(result, w.path, stage, e)
+		return
+	}
+	result.Indexed++
+	result.Chunks += len(w.chunks)
 }
 
 // heading gives a chunk its document title and section path, prefixed to the

@@ -45,6 +45,17 @@ type Options struct {
 	ReadOnly     bool
 	Embedder     EmbeddingProvider
 	Reranker     Reranker
+	// Progress, when set, is called after each document of a sync or rebuild
+	// settles, from a single goroutine.
+	Progress func(IndexProgress)
+}
+
+// IndexProgress reports a running sync or rebuild: Done of Total documents
+// have settled, Path last, with Result counting the outcomes so far.
+type IndexProgress struct {
+	Done, Total int
+	Path        string
+	Result      IndexResult
 }
 
 // Core retains immutable options only. Each call obtains a new locked session.
@@ -65,6 +76,7 @@ type session struct {
 	db           *store.DB
 	embedder     EmbeddingProvider
 	reranker     Reranker
+	progress     func(IndexProgress)
 	readOnly     bool
 	release      func()
 }
@@ -100,7 +112,7 @@ func (c *Core) operation(ctx context.Context, write bool) (*session, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &session{workspace: c.opts.WorkspaceDir, root: workspace.Store(c.opts.WorkspaceDir), readOnly: !write, release: release}
+	s := &session{workspace: c.opts.WorkspaceDir, root: workspace.Store(c.opts.WorkspaceDir), progress: c.opts.Progress, readOnly: !write, release: release}
 	fail := func(err error) (*session, error) { s.close(); return nil, err }
 	s.cfg, err = model.LoadConfig(filepath.Join(s.root, "config.json"))
 	if err != nil {

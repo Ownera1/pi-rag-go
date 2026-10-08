@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/Ownera1/rag-go/internal/tui"
 	"github.com/Ownera1/rag-go/internal/version"
 	"github.com/Ownera1/rag-go/pkg/rag"
 )
@@ -56,7 +57,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		args = append([]string{args[i]}, append(prefix, args[i+1:]...)...)
 	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "usage: rag install|uninstall|init|sync|query|status|rebuild|clean|zotero|connect|mcp|eval|version [--workspace PATH] [options]")
+		fmt.Fprintln(out, "usage: rag install|uninstall|init|sync|query|status|rebuild|clean|tui|zotero|connect|mcp|eval|version [--workspace PATH] [options]")
 		fmt.Fprintln(out, "\nGet started: rag install (once), then rag init in each project.")
 		return nil
 	}
@@ -85,6 +86,18 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 	}
 	if cmd == "eval" {
 		return Evaluate(ctx, rest, out, errout)
+	}
+	if cmd == "tui" {
+		fs := flag.NewFlagSet("rag tui", flag.ContinueOnError)
+		fs.SetOutput(errout)
+		root := fs.String("workspace", "", "explicit workspace root")
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		if !newTerminal(in, errout).interactive {
+			return errors.New("rag tui requires an interactive terminal")
+		}
+		return tui.Run(ctx, *root)
 	}
 	if cmd != "sync" && cmd != "query" && cmd != "status" && cmd != "rebuild" && cmd != "clean" {
 		return fmt.Errorf("unknown command %q; see rag --help and the v0.2 migration guide", cmd)
