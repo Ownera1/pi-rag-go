@@ -8,8 +8,6 @@ PDF extraction, OCR and layout recovery happen upstream, using tools such as Min
 
 ## Quick start
 
-See [migration](MIGRATION.md) before upgrading an existing v0.1 installation.
-
 Install a published native macOS/Linux binary with Homebrew. Install once, then initialize each project:
 
 ```sh
