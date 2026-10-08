@@ -278,7 +278,7 @@ To explain a paper:
 2. See its structure with rag_outline, then read whole sections with rag_read from/to rather than relying on search snippets.
 3. Search within it with rag_query document=<id>; jump to an equation number with mode=literal, e.g. query "\tag{28}".
 4. Expand a hit with rag_read around=<chunk id>; follow definitions, assumptions and cited equations the same way.
-5. For figures, read the pages of the returned pdf path when the client can open files.
+5. For figures, open the image files a passage lists under images, or the pages of the returned pdf, when the client can open files.
 
 Cite page numbers and sections from the passages. Distinguish the authors' text, your own derivations, and points the documents do not support.`
 

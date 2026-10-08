@@ -275,6 +275,56 @@ func TestMinerUSentenceHeadingIsBody(t *testing.T) {
 	}
 }
 
+func TestMinerUFigureChunks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "images"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a", "b", "c", "d"} {
+		if err := os.WriteFile(filepath.Join(dir, "images", name+".jpg"), []byte("jpg"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(dir, "paper_content_list.json")
+	source := `[{"type":"text","text":"The first paragraph describes the uplink transmission system in detail.","page_idx":0},` +
+		`{"type":"image","img_path":"images/a.jpg","image_caption":["Fig. 1. Uplink layout of the proposed transmission scheme."],"page_idx":0},` +
+		`{"type":"image","img_path":"images/c.jpg","image_caption":[],"page_idx":0},` +
+		`{"type":"chart","img_path":"images/b.jpg","chart_caption":["(a)"],"page_idx":0},` +
+		`{"type":"chart","img_path":"../outside.jpg","chart_caption":["Fig. 2. A caption pointing outside the package folder."],"page_idx":0},` +
+		`{"type":"image","img_path":"images/missing.jpg","image_caption":["Fig. 3. A caption whose image file is missing."],"page_idx":0},` +
+		`{"type":"text","text":"The second paragraph discusses the simulation results at length.","page_idx":1},` +
+		`{"type":"table","content":{"image_source":{"path":"images/d.jpg"},"table_caption":[{"type":"text","content":"TABLE I Values of the simulation parameters"}],"html":"<table><tr><td>a</td></tr></table>"}},` +
+		`{"type":"text","text":"References","text_level":1,"page_idx":2},` +
+		`{"type":"image","img_path":"images/a.jpg","image_caption":[],"page_idx":2}]`
+	if err := os.WriteFile(path, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// The indexed chunks cut Fig. 1's caption after its label, as semantic
+	// chunking does at "Fig. 1.".
+	chunks := []string{
+		"The first paragraph describes the uplink transmission system in detail.\n\nFig. 1.",
+		"Uplink layout of the proposed transmission scheme.\n\n(a)\n\nFig. 2. A caption pointing outside the package folder.\n\nFig. 3. A caption whose image file is missing.",
+		"The second paragraph discusses the simulation results at length.",
+		"TABLE I Values of the simulation parameters\na",
+	}
+	got, err := FigureChunks(context.Background(), path, chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	realDir, _ := filepath.EvalSymlinks(dir)
+	img := func(name string) string { return filepath.Join(realDir, "images", name+".jpg") }
+	want := map[int][]string{1: {img("a"), img("c"), img("b")}, 3: {img("d")}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("figure chunks %v, want %v", got, want)
+	}
+	if got, _ := FigureChunks(context.Background(), path, []string{"unrelated text of some other document entirely"}); len(got) != 0 {
+		t.Fatalf("mismatched chunks got images %v", got)
+	}
+	if got, err := FigureChunks(context.Background(), filepath.Join(dir, "notes.txt"), chunks); err != nil || got != nil {
+		t.Fatalf("non-MinerU %v %v", got, err)
+	}
+}
+
 func TestTEICoordinatesKeepPageBoundaries(t *testing.T) {
 	x := `<TEI xmlns="http://www.tei-c.org/ns/1.0"><text><body><div><head>Methods</head>
         <p coords="2,10,20,30,40">Page two.</p><p coords="3,10,20,30,40;4,10,20,30,40">Spanning pages.</p>

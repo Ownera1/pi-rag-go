@@ -79,6 +79,13 @@ func linesText(item map[string]any) string {
 	return value
 }
 
+func images(path string) []string {
+	if path == "" {
+		return nil
+	}
+	return []string{path}
+}
+
 // tableText keeps a table's rows as lines and its cells as " | "-separated
 // columns, so a row still pairs a method with its values. Input without rows
 // falls back to its bare text.
@@ -195,6 +202,7 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 		typ, _ := item["type"].(string)
 		value := ""
 		kind := ""
+		image := ""
 		level := 0
 		content, _ := item["content"].(map[string]any)
 		switch typ {
@@ -250,6 +258,10 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 			if typ == "table" {
 				kind = "table"
 			}
+			image, _ = item["img_path"].(string)
+			if src, ok := content["image_source"].(map[string]any); ok {
+				image, _ = src["path"].(string)
+			}
 			value = figureText(item, typ)
 			if strings.TrimSpace(value) == "" {
 				value = linesText(item)
@@ -283,7 +295,21 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 		} else {
 			value = normalize(value)
 		}
+		headings := func() []string {
+			path := []string{}
+			for l := 1; l <= 6; l++ {
+				if title := levels[l]; title != "" {
+					path = append(path, title)
+				}
+			}
+			return path
+		}
 		if value == "" {
+			// A captionless figure, often one panel of a group, stays with
+			// the text before it; author photos after the references do not.
+			if image != "" && len(blocks) > 0 && !inReferences(headings()) {
+				blocks[len(blocks)-1].Images = append(blocks[len(blocks)-1].Images, image)
+			}
 			return nil
 		}
 		if level > 0 && sentenceHeading(value) {
@@ -300,16 +326,11 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 			}
 			levels[level] = value
 		}
-		path := []string{}
-		for l := 1; l <= 6; l++ {
-			if title := levels[l]; title != "" {
-				path = append(path, title)
-			}
-		}
+		path := headings()
 		if inReferences(path) {
 			return nil
 		}
-		blocks = append(blocks, model.Block{Text: value, Section: section(path), PageStart: page, PageEnd: page, Kind: kind})
+		blocks = append(blocks, model.Block{Text: value, Section: section(path), PageStart: page, PageEnd: page, Kind: kind, Images: images(image)})
 		return nil
 	}
 	var list func([]any, *int) error

@@ -3,6 +3,7 @@ package rag
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -30,10 +31,12 @@ func paperFixture(t *testing.T) (*Core, DocumentInfo, DocumentInfo) {
 	add(1, "text", "Method", 2)
 	add(1, "text", words("method1"), 0)
 	add(2, "equation", `$$y = Hx \tag{7}$$`, 0)
+	items = append(items, `{"type":"image","img_path":"images/fig1.jpg","image_caption":["Fig. 1. Signal flow of the proposed method."],"page_idx":2}`)
 	add(2, "text", words("method2"), 0)
 	add(3, "text", "Results", 2)
 	add(3, "text", words("results3"), 0)
 	sourceFile(t, docPath(c, "Alpha paper/alpha_content_list.json"), []byte("["+strings.Join(items, ",")+"]"))
+	sourceFile(t, docPath(c, "Alpha paper/images/fig1.jpg"), []byte("jpg"))
 	sourceFile(t, docPath(c, "Beta paper/beta.txt"), []byte("beta evidence words and \\tag{7} elsewhere"))
 	if _, err := c.Sync(context.Background()); err != nil {
 		t.Fatal(err)
@@ -55,10 +58,20 @@ func TestReadOutlineAndContinuation(t *testing.T) {
 	if err != nil || all.Truncated || len(all.Passages) != all.Chunks || all.Chunks < 5 {
 		t.Fatalf("whole read: %+v %v", all, err)
 	}
+	images := 0
 	for i, p := range all.Passages {
 		if p.Index != i {
 			t.Fatalf("passage %d has index %d", i, p.Index)
 		}
+		for _, img := range p.Images {
+			images++
+			if !strings.Contains(p.Content, "Fig. 1. Signal flow") || filepath.Base(img) != "fig1.jpg" || !filepath.IsAbs(img) {
+				t.Fatalf("image %q on passage %+v", img, p)
+			}
+		}
+	}
+	if images != 1 {
+		t.Fatalf("want the figure's image once, got %d", images)
 	}
 
 	// Small budgets page through the document without gaps or repeats.
