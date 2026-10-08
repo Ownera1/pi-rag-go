@@ -385,7 +385,7 @@ func (d *DB) Match(ctx context.Context, docs []model.CatalogDocument, kind, id s
 			rows, e := d.SQL.QueryContext(ctx, `SELECT a.item_key,a.parent_key FROM zotero_items a JOIN zotero_items p
 ON p.library_type=a.library_type AND p.library_id=a.library_id AND p.item_key=a.parent_key
 WHERE a.library_type=? AND a.library_id=? AND a.item_type='attachment' AND a.deleted=0 AND p.deleted=0
-AND a.`+column+`<>'' AND a.`+column+`=?`, kind, id, value)
+AND a.`+column+`<>'' AND a.`+column+`=? ORDER BY a.parent_key,a.item_key`, kind, id, value)
 			if e != nil {
 				return r, e
 			}
@@ -403,12 +403,14 @@ AND a.`+column+`<>'' AND a.`+column+`=?`, kind, id, value)
 			if e != nil {
 				return r, e
 			}
-			if len(refs) == 1 {
+			if same, e := d.sameWork(ctx, kind, id, refs); e != nil {
+				return r, e
+			} else if same {
 				ref = &refs[0]
 			}
 		}
 		if ref == nil && zotero.NormalizeDOI(doc.DOI) != "" {
-			rows, e := d.SQL.QueryContext(ctx, "SELECT item_key FROM zotero_items WHERE library_type=? AND library_id=? AND doi=? AND deleted=0 AND item_type NOT IN ('attachment','note','annotation')", kind, id, zotero.NormalizeDOI(doc.DOI))
+			rows, e := d.SQL.QueryContext(ctx, "SELECT item_key FROM zotero_items WHERE library_type=? AND library_id=? AND doi=? AND deleted=0 AND item_type NOT IN ('attachment','note','annotation') ORDER BY item_key", kind, id, zotero.NormalizeDOI(doc.DOI))
 			if e != nil {
 				return r, e
 			}
@@ -426,7 +428,9 @@ AND a.`+column+`<>'' AND a.`+column+`=?`, kind, id, value)
 			if e != nil {
 				return r, e
 			}
-			if len(refs) == 1 {
+			if same, e := d.sameWork(ctx, kind, id, refs); e != nil {
+				return r, e
+			} else if same {
 				ref = &refs[0]
 				method = "doi"
 				lock = false
@@ -477,15 +481,46 @@ func cleanPath(path string) string {
 	}
 	return filepath.Clean(path)
 }
-func titleWords(s string) map[string]bool {
-	s = strings.Map(func(r rune) rune {
+
+// sameWork reports whether refs name one paper: a single item, or Zotero
+// duplicates that share a DOI and a title. Callers order refs, so the first
+// one is a stable pick.
+// ponytail: the pick is the lowest key, not the most complete duplicate.
+func (d *DB) sameWork(ctx context.Context, kind, id string, refs []model.ZoteroReference) (bool, error) {
+	if len(refs) < 2 {
+		return len(refs) == 1, nil
+	}
+	var first string
+	for i, ref := range refs {
+		var doi, title string
+		if err := d.SQL.QueryRowContext(ctx, "SELECT doi,title FROM zotero_items WHERE library_type=? AND library_id=? AND item_key=?", kind, id, ref.ItemKey).Scan(&doi, &title); err != nil {
+			return false, err
+		}
+		doi, title = zotero.NormalizeDOI(doi), strings.Join(titleFields(title), " ")
+		if doi == "" || title == "" {
+			return false, nil
+		}
+		if i == 0 {
+			first = doi + "\x00" + title
+		} else if doi+"\x00"+title != first {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func titleFields(s string) []string {
+	return strings.Fields(strings.Map(func(r rune) rune {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			return unicode.ToLower(r)
 		}
 		return ' '
-	}, s)
+	}, s))
+}
+
+func titleWords(s string) map[string]bool {
 	out := map[string]bool{}
-	for _, w := range strings.Fields(s) {
+	for _, w := range titleFields(s) {
 		out[w] = true
 	}
 	return out
