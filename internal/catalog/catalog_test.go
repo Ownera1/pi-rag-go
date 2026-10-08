@@ -187,3 +187,39 @@ func TestDuplicateItemsWithSameAttachmentFilenameLink(t *testing.T) {
 		t.Fatalf("metadata %+v", m)
 	}
 }
+
+func TestManifestReferenceFollowsManifest(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(filepath.Join(t.TempDir(), "catalog.db"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := snapshot()
+	second := s.Items[0]
+	second.Key, second.Hash, second.Metadata.ItemKey, second.Metadata.DOI = "PAPER002", "two", "PAPER002", "10.1234/b"
+	s.Items = append(s.Items, second)
+	if _, err = db.Apply(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"PAPER001", "PAPER002"} {
+		doc := model.CatalogDocument{Key: "manifest", Path: "/p/rag-source.json", Zotero: &model.ZoteroReference{LibraryType: "user", LibraryID: "42", ItemKey: key}}
+		if _, err = db.Match(ctx, []model.CatalogDocument{doc}, "user", "0"); err != nil {
+			t.Fatal(err)
+		}
+		if m, err := db.Metadata(ctx, doc.Key); err != nil || m.ItemKey != key {
+			t.Fatalf("manifest %s linked %+v %v", key, m, err)
+		}
+	}
+	// A manual link survives a manifest that names another item.
+	doc := model.CatalogDocument{Key: "manifest", Path: "/p/rag-source.json", Zotero: &model.ZoteroReference{LibraryType: "user", LibraryID: "42", ItemKey: "PAPER002"}}
+	if err = db.Link(ctx, doc, model.ZoteroReference{LibraryType: "user", LibraryID: "42", ItemKey: "PAPER001"}, "manual", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Match(ctx, []model.CatalogDocument{doc}, "user", "0"); err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := db.Metadata(ctx, doc.Key); m.ItemKey != "PAPER001" {
+		t.Fatalf("manual link replaced: %+v", m)
+	}
+}

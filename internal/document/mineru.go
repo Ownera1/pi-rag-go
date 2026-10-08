@@ -42,12 +42,41 @@ func jsonText(v any) string {
 		return b.String()
 	case map[string]any:
 		typ, _ := x["type"].(string)
-		if typ != "text" && typ != "" {
-			return ""
+		switch typ {
+		case "", "text":
+			return jsonText(x["content"])
+		case "inline_equation", "equation_inline":
+			if math := jsonText(x["content"]); math != "" {
+				return " $" + math + "$ "
+			}
+		case "interline_equation", "equation_interline":
+			if math := jsonText(x["content"]); math != "" {
+				return " $$" + math + "$$ "
+			}
 		}
-		return jsonText(x["content"])
 	}
 	return ""
+}
+
+// linesText returns the span text of a middle JSON block's lines, one line
+// per row, including nested blocks such as an algorithm's caption and body.
+func linesText(item map[string]any) string {
+	value := ""
+	if lines, ok := item["lines"].([]any); ok {
+		for _, line := range lines {
+			if m, ok := line.(map[string]any); ok {
+				value += jsonText(m["spans"]) + "\n"
+			}
+		}
+	}
+	if children, ok := item["blocks"].([]any); ok {
+		for _, c := range children {
+			if m, ok := c.(map[string]any); ok {
+				value += linesText(m)
+			}
+		}
+	}
+	return value
 }
 
 // figureText returns a figure, chart or table's caption, footnote and, for a
@@ -70,6 +99,10 @@ func figureText(item map[string]any, typ string) string {
 		}
 	}
 	add(src[typ+"_caption"])
+	if typ == "code" {
+		add(src["code_body"])
+		add(src["code_content"])
+	}
 	if typ == "table" {
 		for _, key := range []string{"table_body", "html"} {
 			if s, ok := src[key].(string); ok {
@@ -136,13 +169,7 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 				}
 			}
 			if value == "" {
-				if lines, ok := item["lines"].([]any); ok {
-					for _, line := range lines {
-						if m, ok := line.(map[string]any); ok {
-							value += jsonText(m["spans"]) + "\n"
-						}
-					}
-				}
+				value = linesText(item)
 			}
 		case "list":
 			if content != nil {
@@ -166,6 +193,16 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 		case "image", "chart", "table":
 			// Pixels are not indexed; captions and table text are.
 			value = figureText(item, typ)
+			if strings.TrimSpace(value) == "" {
+				value = linesText(item)
+			}
+		case "code", "algorithm":
+			// Algorithm listings are body text; own chunks like equations.
+			kind = "code"
+			value = figureText(item, "code")
+			if strings.TrimSpace(value) == "" {
+				value = linesText(item)
+			}
 		case "equation", "equation_interline", "interline_equation":
 			// Own chunks: LaTeX merged into prose dilutes its embedding.
 			kind = "equation"
@@ -175,10 +212,12 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 					value = "$$" + math + "$$"
 				}
 			}
+			if value == "" {
+				value = linesText(item)
+			}
 		default:
-			// Code, references and page furniture (header, footer,
-			// page_number, page_footnote) are skipped, as are types MinerU
-			// may add later.
+			// References and page furniture (header, footer, page_number,
+			// page_footnote) are skipped, as are types MinerU may add later.
 			return nil
 		}
 		value = normalize(value)

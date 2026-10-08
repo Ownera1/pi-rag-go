@@ -57,6 +57,27 @@ func TestSourceMetadataReplacementAndReadOnly(t *testing.T) {
 	}
 }
 
+func TestKeywordSearchIgnoresAbsolutePathPrefix(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(filepath.Join(t.TempDir(), "rag.db"), false, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	doc := model.Document{ID: "d", Path: "/tmp/quantum/documents/fruit.md", SearchPath: "fruit.md", Hash: "h"}
+	if err = db.Replace(ctx, doc, []model.Chunk{{ID: "d-0", Content: "apples and pears"}}, [][]float32{{1, 0}}); err != nil {
+		t.Fatal(err)
+	}
+	for query, want := range map[string]int{`"quantum"`: 0, `"fruit"`: 1, `"apples"`: 1} {
+		if m, err := db.FTS(ctx, query, 10); err != nil || len(m) != want {
+			t.Fatalf("%s: %v %v", query, m, err)
+		}
+		if m, err := db.FTSHan(ctx, query, 10); err != nil || len(m) != want {
+			t.Fatalf("han %s: %v %v", query, m, err)
+		}
+	}
+}
+
 func TestReplacementRollsBackAllArtifactsOnFailure(t *testing.T) {
 	ctx := context.Background()
 	db, err := Open(filepath.Join(t.TempDir(), "rag.db"), false, 2)

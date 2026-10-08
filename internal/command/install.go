@@ -321,6 +321,13 @@ func editJSONAgent(path string, h host, add bool) (string, error) {
 	if raw, ok := cfg["mcpServers"]; ok && json.Unmarshal(raw, &servers) != nil {
 		return "", fmt.Errorf("%s: mcpServers is not an object", path)
 	}
+	// JSON null decodes to a nil map.
+	if cfg == nil {
+		cfg = map[string]json.RawMessage{}
+	}
+	if servers == nil {
+		servers = map[string]json.RawMessage{}
+	}
 	want, _ := json.Marshal(map[string]any{"command": h.exe, "args": launch})
 	current, exists := servers["rag-go"]
 	status := "removed"

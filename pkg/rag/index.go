@@ -247,6 +247,9 @@ func (c *session) indexSnapshot(ctx context.Context, db *store.DB, snap sourceSn
 				}
 				rel, _ := filepath.Rel(c.docs, logical)
 				doc.ID = document.ShortHash(rel)
+				if rel, e := filepath.Rel(c.docs, doc.Path); e == nil {
+					doc.SearchPath = filepath.ToSlash(rel)
+				}
 				semantic := c.cfg.Chunking.Mode == "semantic" &&
 					(doc.Format != "text" ||
 						filepath.Base(p) == "rag-source.json" ||

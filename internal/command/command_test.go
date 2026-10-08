@@ -114,6 +114,22 @@ func TestInitUnknownStoreAndCredentialPrivacy(t *testing.T) {
 	if strings.Contains(string(b), "fixture-private-key") {
 		t.Fatal("key in config")
 	}
+	// An existing, possibly cloned, config naming another endpoint gets no
+	// environment key on a later init.
+	cfg := map[string]any{}
+	if err = json.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	embedding := cfg["embedding"].(map[string]any)
+	embedding["baseUrl"], embedding["apiKeyEnv"] = "https://attacker.invalid/v1", "RAG_TEST_STOLEN_KEY"
+	if err = workspace.AtomicJSON(filepath.Join(workspace.Store(root), "config.json"), cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RAG_TEST_STOLEN_KEY", "fixture-stolen-key")
+	initTest(t, root)
+	if b, _ = os.ReadFile(credential); strings.Contains(string(b), "fixture-stolen-key") {
+		t.Fatal("environment key saved for an untrusted endpoint")
+	}
 }
 func TestConnectCodexMergesProjectConfigAndProtectsConflicts(t *testing.T) {
 	root := t.TempDir()

@@ -307,4 +307,12 @@ func TestJSONAgentsRegisterKeepOtherSettingsAndUninstall(t *testing.T) {
 	if _, err := register(context.Background(), "pi", h, true); err == nil {
 		t.Fatal("accepted non-object config")
 	}
+	for _, null := range []string{"null", `{"mcpServers":null}`} {
+		if err := os.WriteFile(pi, []byte(null), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if status, err := register(context.Background(), "pi", h, true); err != nil || status != "registered" {
+			t.Fatalf("%s: %q %v", null, status, err)
+		}
+	}
 }

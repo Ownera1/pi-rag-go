@@ -3,6 +3,7 @@ package rag
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"net"
 	"path/filepath"
@@ -247,6 +248,9 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 		if err != nil {
 			if e := ctx.Err(); e != nil {
 				return out, e
+			}
+			if opts.RequireRerank {
+				return out, fmt.Errorf("rerank failed: %w", err)
 			}
 			if out.Degraded != "" {
 				out.Degraded += "; "
