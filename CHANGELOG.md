@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.1 (2026-10-07)
 
 Existing v0.4 indexes report `rebuild required`; run `rag rebuild` once after upgrading.
 
@@ -14,6 +14,7 @@ Existing v0.4 indexes report `rebuild required`; run `rag rebuild` once after up
 - Hard splits of very long unbroken lines, such as minified code, are bounded and no longer take minutes.
 - `rag install` no longer panics on an agent config that is `null` or has `"mcpServers": null`.
 - `rag clean` refuses a symlinked `.rag-go/staging` instead of following it.
+- Zotero: a paper imported twice links automatically when every duplicate shares the same DOI and title (the lowest item key wins); differing duplicates still never auto-link.
 
 ## v0.4.0 (2026-10-07)
 
