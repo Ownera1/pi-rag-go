@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.6.1 (2026-10-08)
+
+No rebuild needed: v0.6.0 indexes stay compatible.
 
 - `rag_read` passages of MinerU documents list the images of the figures, charts and tables they hold under `images` (absolute paths inside the paper's folder), so an agent that can open files reads the figure itself. Images are matched to chunks at read time by locating the parsed blocks in the indexed text, so no rebuild is needed: on six real papers all 120 body figures were placed, 112 on a passage of the same page and the rest, panels at the top of the next page, on the text just before them; author photos after the references are left out. A read takes about 6 ms more for the parse and alignment.
 - `rag_outline` and `rag_read` drop the title heading every section shares, such as the paper title MinerU puts above all headings: sections read `I. INTRODUCTION` instead of `<full title> / I. INTRODUCTION`, and the title's own section keeps its name. On three real papers outlines shrank 37–46% with identical chunk ranges.
