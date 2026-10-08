@@ -86,7 +86,7 @@ Existing v0.2 indexes report `rebuild required`; run `rag rebuild` once after up
 - Project-scoped Claude/Codex registrations and direct workspace credential injection.
 - Preserved structured parsers, source pages, Chinese BM25, vector/hybrid/rerank and evaluation.
 - Removed PDF conversion, background service/watchers, global store/path registration, TypeScript legacy mode and compatibility binaries.
-- Native archives, installer and Homebrew Formula now install only `rag`. See [migration](MIGRATION.md).
+- Native archives, installer and Homebrew Formula now install only `rag`.
 
 ## v0.1.0
 
