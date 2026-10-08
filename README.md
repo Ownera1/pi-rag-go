@@ -69,7 +69,7 @@ Every operation reloads configuration, state and the active database. Reads hold
 | Markdown / MDX | CommonMark headings, paragraphs and code; `$$` display equations in their own chunks; image links reduced to alt text, one-line HTML tables to cell text; References/Bibliography/参考文献 sections skipped | Markdown lines |
 | TEI XML | Abstract, body and appendix; visual/formula/reference subtrees excluded | Physical PDF pages from explicit GROBID coordinates |
 | JATS XML | Abstract and nested body sections | Unknown pages |
-| MinerU JSON | Supported body-text, heading and list exports | Explicit `page_idx` converted from zero-based to one-based |
+| MinerU JSON | Body text, headings and lists with inline `$…$` and display `$$…$$` equations, algorithm blocks, and figure/table captions with table text, from content list v1/v2, middle JSON or structured content; references and page headers/footers/numbers/footnotes skipped | Explicit `page_idx` converted from zero-based to one-based |
 | `.rag-blocks.json` | Version 1 normalized body blocks | Explicit validated page ranges |
 | DOCX | Visible paragraphs, headings, lists and table-cell text | Unknown pages |
 | HTML | Main/article/body text with baseline hidden/navigation filtering | Unknown pages |
@@ -140,7 +140,7 @@ python3 scripts/smoke-release.py /tmp/rag-go-extracted
 python3 scripts/test-release.py
 ```
 
-The smoke suite uses an actual extracted binary and deterministic local HTTP providers. It checks standalone queries, automatic sync, FTS5/sqlite-vec, source pages, real stdio and HTTP MCP, rebuild/clean and all four evaluation modes. Multi-process race tests cover shared readers, serialized writers, lock cancellation and duplicate embedding prevention. See [local acceptance and live acceptance boundaries](VALIDATION.md). These establish local behavior, not live provider quality, billing, Claude/Codex acceptance or all-platform release success.
+The smoke suite uses an actual extracted binary and deterministic local HTTP providers. It checks standalone queries, automatic sync, FTS5/sqlite-vec, source pages, real stdio and HTTP MCP, rebuild/clean and all four evaluation modes. Multi-process race tests cover shared readers, serialized writers, lock cancellation and duplicate embedding prevention. These establish local behavior, not live provider quality, billing, Claude/Codex acceptance or all-platform release success.
 
 Releases retain native macOS arm64 and Linux arm64/amd64 archives, SHA-256 verification and a precompiled Homebrew Formula. The archive contains only `rag`, LICENSE and README. The script installer installs only `rag`, verifies checksums and preserves an existing binary on verification failure. It does not manage old system services or remove legacy executables.
 

@@ -80,7 +80,7 @@ my-project/
 | Markdown / MDX | CommonMark 标题、段落和代码；`$$` 行间公式单独成块；图片链接只保留 alt 文字，单行 HTML 表格只保留单元格文字；跳过 References/Bibliography/参考文献 章节 | Markdown 行号 |
 | TEI XML | 摘要、正文和附录，排除图表、公式、参考文献等子树 | 明确的 GROBID 坐标提供物理 PDF 页码 |
 | JATS XML | 摘要及嵌套正文章节 | 页码未知 |
-| MinerU JSON | 支持的正文、标题和列表导出 | 将显式 `page_idx` 从零基转成一基页码 |
+| MinerU JSON | 正文、标题和列表，保留行内 `$…$` 与行间 `$$…$$` 公式、算法块，以及图表标题和表格文字；支持 content list v1/v2、middle JSON 和 structured content；跳过参考文献及页眉、页脚、页码、脚注 | 将显式 `page_idx` 从零基转成一基页码 |
 | `.rag-blocks.json` | Version 1 规范化正文块 | 经校验的显式页码范围 |
 | DOCX | 可见段落、标题、列表和表格单元格文字 | 页码未知 |
 | HTML | main/article/body 文字及基础隐藏、导航过滤 | 页码未知 |
@@ -196,7 +196,7 @@ python3 scripts/smoke-release.py /tmp/rag-go-extracted
 python3 scripts/test-release.py
 ```
 
-Smoke suite 使用解压后的实际二进制和固定的本地 HTTP provider，检查独立查询、自动同步、FTS5/sqlite-vec、来源页码、stdio/HTTP MCP、重建、清理及四种评估模式。多进程测试覆盖共享读取、串行写入、锁取消和重复 embedding 防护。详见 [本地验收记录](VALIDATION.md) 及 [Zotero 验证记录](ZOTERO.md#验证记录)。这些检查验证本地行为，真实 provider 质量、费用、Agent 调用及跨平台发行另行验收。
+Smoke suite 使用解压后的实际二进制和固定的本地 HTTP provider，检查独立查询、自动同步、FTS5/sqlite-vec、来源页码、stdio/HTTP MCP、重建、清理及四种评估模式。多进程测试覆盖共享读取、串行写入、锁取消和重复 embedding 防护。Zotero 的实测记录见 [ZOTERO.md](ZOTERO.md#验证记录)。这些检查验证本地行为，真实 provider 质量、费用、Agent 调用及跨平台发行另行验收。
 
 发布保留 macOS arm64 与 Linux arm64/amd64 原生压缩包、SHA-256 校验和预编译 Homebrew Formula。压缩包包含 `rag`、LICENSE 和 README。脚本安装器只安装 `rag`，校验失败时保留原有二进制；旧版系统服务和 legacy executables 按 [迁移说明](MIGRATION.md) 处理。
 
