@@ -79,7 +79,7 @@ my-project/
 | Markdown / MDX | CommonMark 标题、段落和代码；`$$` 行间公式保持完整，并与引出它的句子同在一个 chunk；图片链接只保留 alt 文字，单行 HTML 表格只保留单元格文字；跳过 References/Bibliography/参考文献 章节 | Markdown 行号 |
 | TEI XML | 摘要、正文和附录，排除图表、公式、参考文献等子树 | 明确的 GROBID 坐标提供物理 PDF 页码 |
 | JATS XML | 摘要及嵌套正文章节 | 页码未知 |
-| MinerU JSON | 正文、标题和列表，保留行内 `$…$` 与行间 `$$…$$` 公式、算法块，以及图表标题和表格文字；支持 content list v1/v2、middle JSON 和 structured content；跳过参考文献及页眉、页脚、页码、脚注 | 将显式 `page_idx` 从零基转成一基页码 |
+| MinerU JSON | 正文、标题和列表，保留行内 `$…$` 与行间 `$$…$$` 公式、算法块，图表标题，以及按行保留、单元格以 ` | ` 分隔并独立成块的表格；支持 content list v1/v2、middle JSON 和 structured content；跳过参考文献及页眉、页脚、页码、脚注；以句号结尾的标题（如 `Proof: See Appendix A.`）按正文处理 | 将显式 `page_idx` 从零基转成一基页码 |
 | `.rag-blocks.json` | Version 1 规范化正文块 | 经校验的显式页码范围 |
 | DOCX | 可见段落、标题、列表和表格单元格文字 | 页码未知 |
 | HTML | main/article/body 文字及基础隐藏、导航过滤 | 页码未知 |

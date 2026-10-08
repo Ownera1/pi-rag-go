@@ -69,7 +69,7 @@ Every operation reloads configuration, state and the active database. Reads hold
 | Markdown / MDX | CommonMark headings, paragraphs and code; `$$` display equations kept whole, in the chunk of the sentence that introduces them; image links reduced to alt text, one-line HTML tables to cell text; References/Bibliography/参考文献 sections skipped | Markdown lines |
 | TEI XML | Abstract, body and appendix; visual/formula/reference subtrees excluded | Physical PDF pages from explicit GROBID coordinates |
 | JATS XML | Abstract and nested body sections | Unknown pages |
-| MinerU JSON | Body text, headings and lists with inline `$…$` and display `$$…$$` equations, algorithm blocks, and figure/table captions with table text, from content list v1/v2, middle JSON or structured content; references and page headers/footers/numbers/footnotes skipped | Explicit `page_idx` converted from zero-based to one-based |
+| MinerU JSON | Body text, headings and lists with inline `$…$` and display `$$…$$` equations, algorithm blocks, figure/table captions, and tables as rows of ` | `-separated cells in their own chunks, from content list v1/v2, middle JSON or structured content; references and page headers/footers/numbers/footnotes skipped; a heading ending in a period, such as `Proof: See Appendix A.`, is read as body text | Explicit `page_idx` converted from zero-based to one-based |
 | `.rag-blocks.json` | Version 1 normalized body blocks | Explicit validated page ranges |
 | DOCX | Visible paragraphs, headings, lists and table-cell text | Unknown pages |
 | HTML | Main/article/body text with baseline hidden/navigation filtering | Unknown pages |
