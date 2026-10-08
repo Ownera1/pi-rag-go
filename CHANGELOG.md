@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.0 (2026-10-07)
+
+- `rag tui` opens an interactive panel for a workspace: index status (counts, whether a sync or rebuild is needed and why, the last sync, failed files), every workspace setting tagged by when a change takes effect (immediately, next sync, next Zotero sync, or after rebuild), and sync, rebuild and clean with a per-file progress bar; `esc` cancels a running task. Saving validates the configuration and refuses to overwrite a `config.json` edited elsewhere since the panel loaded it. The layout adapts to the terminal size.
+- `pkg/rag`: `Options.Progress` receives an `IndexProgress` (documents settled, total, last path and running counts) as each document of a sync or rebuild settles.
+
 ## v0.4.1 (2026-10-07)
 
 Existing v0.4 indexes report `rebuild required`; run `rag rebuild` once after upgrading.
