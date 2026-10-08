@@ -70,7 +70,7 @@ def check_stdio(binary, root, readonly):
         process.stdin.flush()
         tools = stdio_call(process, 2, "tools/list", {})["tools"]
         names = sorted(tool["name"] for tool in tools)
-        expected = ["rag_list_documents", "rag_query", "rag_status"]
+        expected = ["rag_list_documents", "rag_outline", "rag_query", "rag_read", "rag_status"]
         if not readonly:
             expected += ["rag_sync", "rag_rebuild", "rag_zotero_sync", "rag_zotero_match", "rag_zotero_link"]
         assert names == sorted(expected), names
@@ -81,6 +81,11 @@ def check_stdio(binary, root, readonly):
         assert not result.get("isError"), result
         structured = result["structuredContent"]
         assert bool(structured["hits"]) == (not readonly), structured
+        if structured["hits"]:
+            hit = structured["hits"][0]["chunk"]
+            read = stdio_call(process, 5, "tools/call", {"name": "rag_read", "arguments": {"around": hit["id"]}})
+            assert not read.get("isError"), read
+            assert hit["content"] in [p["content"] for p in read["structuredContent"]["passages"]], read
         if readonly:
             stdio_call(process, 4, "tools/call", {"name": "rag_sync", "arguments": {}}, expect_error=True)
     finally:
@@ -158,7 +163,7 @@ def smoke(binaries):
                     "capabilities": {}, "clientInfo": {"name": "http-smoke", "version": "1"}})
                 assert not error
                 tools, _, error = http_call(url, 2, "tools/list", {}, session)
-                assert not error and sorted(t["name"] for t in tools["tools"]) == ["rag_list_documents", "rag_query", "rag_status"]
+                assert not error and sorted(t["name"] for t in tools["tools"]) == ["rag_list_documents", "rag_outline", "rag_query", "rag_read", "rag_status"]
                 result, _, error = http_call(url, 3, "tools/call", {"name": "rag_query",
                     "arguments": {"query": "httppending", "mode": "bm25"}}, session)
                 assert not error and not result.get("isError") and not result["structuredContent"]["hits"]

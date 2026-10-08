@@ -63,14 +63,17 @@ type Hit struct {
 }
 
 type QueryOptions struct {
-	Filter        *MetadataFilter `json:"filter,omitempty"`
-	DisableSync   bool            `json:"disable_sync,omitempty"`
-	TopK          int             `json:"top_k"`
-	CandidateTopK int             `json:"candidate_top_k"`
-	Alpha         *float64        `json:"alpha,omitempty"`
-	Mode          string          `json:"mode,omitempty"`
-	DisableRerank bool            `json:"disable_rerank,omitempty"`
-	RequireRerank bool            `json:"require_rerank,omitempty"`
+	Filter *MetadataFilter `json:"filter,omitempty"`
+	// Document restricts recall to one document: its id, path or a unique
+	// part of its path or title.
+	Document      string   `json:"document,omitempty"`
+	DisableSync   bool     `json:"disable_sync,omitempty"`
+	TopK          int      `json:"top_k"`
+	CandidateTopK int      `json:"candidate_top_k"`
+	Alpha         *float64 `json:"alpha,omitempty"`
+	Mode          string   `json:"mode,omitempty"`
+	DisableRerank bool     `json:"disable_rerank,omitempty"`
+	RequireRerank bool     `json:"require_rerank,omitempty"`
 }
 
 type QueryResult struct {

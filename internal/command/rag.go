@@ -57,7 +57,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		args = append([]string{args[i]}, append(prefix, args[i+1:]...)...)
 	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "usage: rag install|uninstall|init|sync|query|status|rebuild|clean|tui|zotero|connect|mcp|eval|version [--workspace PATH] [options]")
+		fmt.Fprintln(out, "usage: rag install|uninstall|init|sync|query|list|outline|read|status|rebuild|clean|tui|zotero|connect|mcp|eval|version [--workspace PATH] [options]")
 		fmt.Fprintln(out, "\nGet started: rag install (once), then rag init in each project.")
 		return nil
 	}
@@ -99,13 +99,15 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		}
 		return tui.Run(ctx, *root)
 	}
-	if cmd != "sync" && cmd != "query" && cmd != "status" && cmd != "rebuild" && cmd != "clean" {
+	if cmd != "sync" && cmd != "query" && cmd != "status" && cmd != "rebuild" && cmd != "clean" && cmd != "list" && cmd != "outline" && cmd != "read" {
 		return fmt.Errorf("unknown command %q; see rag --help and the v0.2 migration guide", cmd)
 	}
 	fs := flag.NewFlagSet("rag "+cmd, flag.ContinueOnError)
 	fs.SetOutput(errout)
 	root := fs.String("workspace", "", "explicit workspace root")
 	opts := rag.QueryOptions{}
+	read := rag.ReadOptions{}
+	before, after, from, to := 0, 0, 0, 0
 	yearFrom, yearTo := 0, 0
 	var tags, collections stringList
 	keep, confirm, dryRun := 3, false, false
@@ -114,11 +116,25 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		fs.IntVar(&yearTo, "year-to", 0, "maximum publication year")
 		fs.Var(&tags, "tag", "required Zotero tag; repeat for AND")
 		fs.Var(&collections, "collection", "required collection key; repeat for AND")
-		fs.StringVar(&opts.Mode, "mode", "hybrid", "hybrid, vector or bm25")
+		fs.StringVar(&opts.Mode, "mode", "hybrid", "hybrid, vector, bm25 or literal")
+		fs.StringVar(&opts.Document, "document", "", "search only this document: id, path or unique part of its path or title")
 		fs.IntVar(&opts.TopK, "top-k", 0, "returned hits")
 		fs.IntVar(&opts.CandidateTopK, "candidate-top-k", 0, "rerank candidate count")
 		fs.BoolVar(&opts.DisableRerank, "no-rerank", false, "disable rerank")
 		fs.BoolVar(&opts.DisableSync, "no-sync", false, "query the existing index without synchronization")
+	}
+	if cmd == "outline" || cmd == "read" {
+		fs.StringVar(&read.Document, "document", "", "document id, path or unique part of its path or title")
+	}
+	if cmd == "read" {
+		fs.StringVar(&read.Around, "around", "", "chunk id to read around")
+		fs.IntVar(&before, "before", 0, "chunks before --around (default 2)")
+		fs.IntVar(&after, "after", 0, "chunks after --around (default 2)")
+		fs.IntVar(&from, "from", 0, "first chunk index")
+		fs.IntVar(&to, "to", 0, "last chunk index")
+		fs.StringVar(&read.Pages, "pages", "", "page or range, such as 8-9")
+		fs.IntVar(&read.MaxTokens, "max-tokens", 0, "token budget (default 4000, max 16000)")
+		fs.StringVar(&read.Version, "version", "", "fail if the document's version differs")
 	}
 	if cmd == "clean" {
 		fs.IntVar(&keep, "keep", 3, "total generations to retain")
@@ -128,10 +144,22 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 	if err := fs.Parse(ReorderFlags(rest, map[string]bool{"no-sync": true, "no-rerank": true, "confirm": true, "dry-run": true, "help": true, "h": true})); err != nil {
 		return err
 	}
-	if cmd != "query" && fs.NArg() != 0 {
+	if cmd == "outline" && fs.NArg() > 0 && read.Document == "" {
+		read.Document = strings.Join(fs.Args(), " ")
+	} else if cmd != "query" && fs.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
 	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "before":
+			read.Before = &before
+		case "after":
+			read.After = &after
+		case "from":
+			read.From = &from
+		case "to":
+			read.To = &to
+		}
 		if f.Name == "year-from" || f.Name == "year-to" || f.Name == "tag" || f.Name == "collection" {
 			if opts.Filter == nil {
 				opts.Filter = &rag.MetadataFilter{Tags: tags, Collections: collections}
@@ -155,6 +183,18 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		result, err = core.Sync(ctx)
 	case "query":
 		result, err = core.Query(ctx, strings.Join(fs.Args(), " "), opts)
+	case "list":
+		result, err = core.Documents(ctx)
+	case "outline":
+		var r rag.Outline
+		if r, err = core.Outline(ctx, read.Document); err == nil {
+			result = r
+		}
+	case "read":
+		var r rag.ReadResult
+		if r, err = core.Read(ctx, read); err == nil {
+			result = r
+		}
 	case "status":
 		result, err = core.Status(ctx)
 	case "rebuild":

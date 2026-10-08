@@ -30,6 +30,9 @@ type CatalogDocument struct {
 	SourcePath string           `json:"sourcePath,omitempty"`
 	Title      string           `json:"title"`
 	Zotero     *ZoteroReference `json:"zotero,omitempty"`
+	// ID prefixes the document's chunk ids; Hash is its indexed content hash.
+	ID   string `json:"-"`
+	Hash string `json:"-"`
 }
 
 type ZoteroConfig struct {

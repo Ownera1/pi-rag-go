@@ -168,9 +168,9 @@ func (d *DB) Documents(ctx context.Context) ([]model.CatalogDocument, error) {
 	if err != nil {
 		return nil, err
 	}
-	q := "SELECT path,COALESCE(title,''),'' AS document_key,'' AS source_path,'' AS zotero_ref,'' AS doi FROM files"
+	q := "SELECT path,COALESCE(title,''),'' AS document_key,'' AS source_path,'' AS zotero_ref,'' AS doi,COALESCE(document_id,''),hash FROM files"
 	if cols["document_key"] && cols["source_path"] && cols["zotero_ref"] && cols["doi"] {
-		q = "SELECT path,COALESCE(title,''),document_key,source_path,zotero_ref,doi FROM files"
+		q = "SELECT path,COALESCE(title,''),document_key,source_path,zotero_ref,doi,COALESCE(document_id,''),hash FROM files"
 	}
 	rows, err := d.SQL.QueryContext(ctx, q+" ORDER BY path")
 	if err != nil {
@@ -181,7 +181,7 @@ func (d *DB) Documents(ctx context.Context) ([]model.CatalogDocument, error) {
 	for rows.Next() {
 		var v model.CatalogDocument
 		var ref string
-		if err = rows.Scan(&v.Path, &v.Title, &v.Key, &v.SourcePath, &ref, &v.DOI); err != nil {
+		if err = rows.Scan(&v.Path, &v.Title, &v.Key, &v.SourcePath, &ref, &v.DOI, &v.ID, &v.Hash); err != nil {
 			return nil, err
 		}
 		if ref != "" {
@@ -477,6 +477,37 @@ func (d *DB) List(ctx context.Context) ([]string, error) {
 	return result, rows.Err()
 }
 
+// ChunkRows returns the rowids of path's chunks in document order.
+func (d *DB) ChunkRows(ctx context.Context, path string) ([]int64, error) {
+	return d.rowids(ctx, "SELECT rowid FROM chunks WHERE file_path=? ORDER BY chunk_index", path)
+}
+
+// Literal returns the rowids of chunks containing text, ignoring whitespace,
+// in document order, so `\tag {28}` finds `\tag{28}`.
+func (d *DB) Literal(ctx context.Context, text string, limit int, filtered ...bool) ([]int64, error) {
+	strip := func(s string) string {
+		return "replace(replace(replace(replace(" + s + ",' ',''),char(10),''),char(9),''),char(13),'')"
+	}
+	return d.rowids(ctx, "SELECT rowid FROM chunks WHERE instr("+strip("chunk_content")+","+strip("?")+")>0"+filterSQL(filtered)+" ORDER BY file_path,chunk_index LIMIT ?", text, limit)
+}
+
+func (d *DB) rowids(ctx context.Context, q string, args ...any) ([]int64, error) {
+	rows, err := d.SQL.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []int64{}
+	for rows.Next() {
+		var id int64
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 type Match struct {
 	RowID int64
 	Score float64
@@ -575,6 +606,21 @@ DELETE FROM temp.allowed_documents; DELETE FROM temp.allowed_chunks;`); err != n
 		return err
 	}
 	return tx.Commit()
+}
+
+// RestrictDocument narrows the permitted chunks to path's: within an active
+// filter when filtered, otherwise from all chunks.
+func (d *DB) RestrictDocument(ctx context.Context, path string, filtered bool) error {
+	if !filtered {
+		if _, err := d.SQL.ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS allowed_chunks (rowid INTEGER PRIMARY KEY);
+DELETE FROM temp.allowed_chunks;`); err != nil {
+			return err
+		}
+		_, err := d.SQL.ExecContext(ctx, "INSERT INTO temp.allowed_chunks SELECT rowid FROM chunks WHERE file_path=?", path)
+		return err
+	}
+	_, err := d.SQL.ExecContext(ctx, "DELETE FROM temp.allowed_chunks WHERE rowid NOT IN (SELECT rowid FROM chunks WHERE file_path=?)", path)
+	return err
 }
 
 func (d *DB) documentColumnsInTx(ctx context.Context, tx *sql.Tx) (bool, error) {
