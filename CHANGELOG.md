@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.6.0 (2026-10-08)
 
-Existing indexes report `rebuild required`; run `rag rebuild` once after upgrading.
+Existing v0.5 indexes report `rebuild required`; run `rag rebuild` once after upgrading. MCP clients and scripts that read `hits[].metadata` or the `rag_list_documents` path list need the changes marked Breaking below.
 
 - Agents can read a paper instead of only searching it. `rag_read` returns one document's chunks in order, around a hit's chunk id, by chunk range or by PDF page, within a token budget with a `next` cursor, and fails on a stale `version` instead of reading shifted chunks. `rag_outline` lists a document's sections as chunk ranges with pages and the PDF path. `rag_query` takes `document` to search one paper, and `mode=literal` finds exact text such as `\tag{28}`. All three work on read-only and HTTP servers, and the MCP server's instructions describe the reading workflow. CLI: `rag list`, `rag outline`, `rag read`, `rag query --document`.
 - Breaking: query results describe each document once. Hits no longer carry `metadata`; they name their document in `document`, and the result's `documents` map gives each document's `version` and, when linked, its Zotero `metadata` (abstract included). On six papers this cut query output by 39–51% when hits come from one paper and 25% across three, with the same chunk content. Read `documents[hit.document].metadata` where you read `hit.metadata`.
