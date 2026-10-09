@@ -204,6 +204,55 @@ func applyFixes(blocks []model.Block, fix []byte) ([]model.Block, error) {
 	return out, nil
 }
 
+// AddFix appends a wrong<TAB>right pair to the FixesFile beside path, once
+// wrong occurs exactly once in the document's text with the earlier fixes
+// applied, so the pair can neither fail the document nor change other
+// passages. It returns the file and the pair's line number.
+func AddFix(ctx context.Context, path, wrong, right string) (string, int, error) {
+	switch {
+	case !hasFixes(path):
+		return "", 0, fmt.Errorf("%s applies only to MinerU folders and rag-source.json packages; edit %s itself", FixesFile, path)
+	case wrong == "" || wrong == right:
+		return "", 0, errors.New("wrong must be non-empty and differ from right")
+	case strings.ContainsAny(wrong+right, "\t\r\n"):
+		return "", 0, errors.New("wrong and right must not contain tabs or line breaks; fix each line separately")
+	case strings.HasPrefix(wrong, "#"):
+		return "", 0, fmt.Errorf("wrong must not start with #, which comments out a line of %s; include the text before it", FixesFile)
+	}
+	d, err := Parse(ctx, path)
+	if err != nil {
+		return "", 0, err
+	}
+	n := 0
+	for _, b := range d.Blocks {
+		n += strings.Count(b.Text, wrong)
+	}
+	if n == 0 {
+		return "", 0, fmt.Errorf("%q is not in the document text; copy it from one line of a passage as read", wrong)
+	}
+	if n > 1 {
+		return "", 0, fmt.Errorf("%q occurs %d times in the document text; include surrounding text so it occurs once", wrong, n)
+	}
+	file := filepath.Join(filepath.Dir(path), FixesFile)
+	old, err := readFile(file)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", 0, err
+	}
+	line := wrong + "\t" + right + "\n"
+	if len(old) > 0 && old[len(old)-1] != '\n' {
+		line = "\n" + line
+	}
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return "", 0, err
+	}
+	if _, err = f.WriteString(line); err != nil {
+		_ = f.Close()
+		return "", 0, err
+	}
+	return file, bytes.Count(old, []byte("\n")) + strings.Count(line, "\n"), f.Close()
+}
+
 func Parse(ctx context.Context, path string) (model.Document, error) {
 	d, err := parse(ctx, path)
 	if err != nil {

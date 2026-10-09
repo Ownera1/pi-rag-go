@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Agents correct extraction errors while reading. `rag_fix` (CLI `rag fix`) appends a `wrong<TAB>right` pair to the document folder's `rag-fixes.tsv` after checking that the wrong text, within one line, occurs exactly once in the document with the earlier pairs applied, so a correction can neither fail the document nor change another passage; MinerU output stays untouched. It does not sync, so chunk ids stay valid while reading, and the next query reindexes the document once. The MCP instructions tell agents to fix only misreadings confirmed on the PDF page or image and to report the authors' own mistakes instead. Write servers only.
+
 ## v0.6.1 (2026-10-08)
 
 No rebuild needed: v0.6.0 indexes stay compatible.

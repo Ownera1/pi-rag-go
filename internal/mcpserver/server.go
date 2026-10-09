@@ -240,6 +240,24 @@ func serve(open resolve, readOnly bool, lifecycle ...context.Context) *mcp.Serve
 			r, e := core.LinkZotero(ctx, in.Path, in.Reference, false)
 			return nil, r, e
 		})
+		type fixIn struct {
+			Workspace string `json:"workspace,omitempty" jsonschema:"absolute path of the current project, or any directory inside it; required unless this server is pinned to one project with --workspace"`
+			rag.FixOptions
+		}
+		mcp.AddTool(s, &mcp.Tool{
+			Name: "rag_fix",
+			Description: "Correct an extraction error, such as a misread symbol, in a MinerU or manifest document after checking the original PDF page or image. " +
+				"Records wrong<TAB>right in the document folder's rag-fixes.tsv; wrong must occur exactly once. The source files stay unchanged, " +
+				"and the next query reindexes the document, so chunk ids stay valid while reading",
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, in fixIn) (*mcp.CallToolResult, rag.FixResult, error) {
+			core, done, err := open(in.Workspace)
+			if err != nil {
+				return nil, rag.FixResult{}, err
+			}
+			defer done()
+			r, e := core.Fix(ctx, in.FixOptions)
+			return nil, r, e
+		})
 		mcp.AddTool(s, &mcp.Tool{
 			Name:        "rag_sync",
 			Description: "Synchronize this workspace documents directory",
@@ -279,6 +297,7 @@ To explain a paper:
 3. Search within it with rag_query document=<id>; jump to an equation number with mode=literal, e.g. query "\tag{28}".
 4. Expand a hit with rag_read around=<chunk id>; follow definitions, assumptions and cited equations the same way.
 5. For figures, open the image files a passage lists under images, or the pages of the returned pdf, when the client can open files.
+6. When a passage misreads the PDF, such as a wrong symbol, subscript or digit or a hyphen dropped at a line break, and the PDF page or image confirms it, record the correction with rag_fix if available. Fix extraction errors only; the authors' own typos and mistakes are the original text, so report them instead.
 
 Cite page numbers and sections from the passages. Distinguish the authors' text, your own derivations, and points the documents do not support.`
 

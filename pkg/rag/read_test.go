@@ -220,3 +220,29 @@ func TestQueryWithinDocumentAndLiteral(t *testing.T) {
 		t.Fatal("unknown document accepted")
 	}
 }
+
+func TestFixRecordsCorrectionForNextQuery(t *testing.T) {
+	ctx := context.Background()
+	c, alpha, beta := paperFixture(t)
+	for name, opts := range map[string]FixOptions{
+		"stale version": {Document: alpha.ID, Wrong: "y = Hx", Right: "y = Gx", Version: "000000000000"},
+		"plain file":    {Document: beta.ID, Wrong: "beta", Right: "gamma"},
+		"absent":        {Document: alpha.ID, Wrong: "y = Qx", Right: "y = Gx"},
+	} {
+		if r, err := c.Fix(ctx, opts); err == nil {
+			t.Errorf("%s: no error, got %+v", name, r)
+		}
+	}
+	r, err := c.Fix(ctx, FixOptions{Document: alpha.ID, Wrong: "y = Hx", Right: "y = Gx", Version: alpha.Version})
+	if err != nil || r.Line != 1 || r.File != filepath.Join(filepath.Dir(alpha.Path), "rag-fixes.tsv") {
+		t.Fatalf("fix %+v %v", r, err)
+	}
+	// Reading does not sync, so chunk ids stay valid until the next query.
+	if read, err := c.Read(ctx, ReadOptions{Document: alpha.ID, Version: alpha.Version, MaxTokens: maxReadTokens}); err != nil || !strings.Contains(fmt.Sprint(read.Passages), "y = Hx") {
+		t.Fatalf("read after fix: %v", err)
+	}
+	q, err := c.Query(ctx, "y = Gx", QueryOptions{Mode: "literal", Document: alpha.ID})
+	if err != nil || len(q.Hits) != 1 || q.Documents[alpha.ID].Version == alpha.Version {
+		t.Fatalf("query after fix: %+v %v", q, err)
+	}
+}

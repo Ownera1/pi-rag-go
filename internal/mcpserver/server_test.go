@@ -66,7 +66,7 @@ func checkTools(t *testing.T, ctx context.Context, session *mcp.ClientSession, r
 	sort.Strings(names)
 	want := []string{"rag_list_documents", "rag_outline", "rag_query", "rag_read", "rag_status"}
 	if !readOnly {
-		want = append(want, "rag_rebuild", "rag_sync", "rag_zotero_sync", "rag_zotero_match", "rag_zotero_link")
+		want = append(want, "rag_fix", "rag_rebuild", "rag_sync", "rag_zotero_sync", "rag_zotero_match", "rag_zotero_link")
 		sort.Strings(want)
 	}
 	raw, _ := json.Marshal(names)
@@ -81,7 +81,7 @@ func checkTools(t *testing.T, ctx context.Context, session *mcp.ClientSession, r
 		}
 	}
 	if readOnly {
-		for _, tool := range []string{"rag_sync", "rag_rebuild", "rag_zotero_sync", "rag_zotero_match", "rag_zotero_link", "rag_index", "rag_clear", "rag_cleanup"} {
+		for _, tool := range []string{"rag_fix", "rag_sync", "rag_rebuild", "rag_zotero_sync", "rag_zotero_match", "rag_zotero_link", "rag_index", "rag_clear", "rag_cleanup"} {
 			r, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: map[string]any{"confirm": true}})
 			if err == nil && !r.IsError {
 				t.Fatal("readonly allowed " + tool)
@@ -257,7 +257,7 @@ func TestDynamicServerResolvesWorkspacePerCall(t *testing.T) {
 	}
 	defer session.Close()
 	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 10 {
+	if err != nil || len(tools.Tools) != 11 {
 		t.Fatalf("server outside a workspace: %+v %v", tools, err)
 	}
 	if _, r := statusRoot(t, ctx, session, map[string]any{}); r == nil || !r.IsError {
