@@ -629,6 +629,10 @@ func TestRerankSeesTitleAndSection(t *testing.T) {
 	if err := os.WriteFile(docPath(c, "a.md"), []byte("# Paper\n\n## Complexity Analysis\n\nstable evidence\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// A section under the document's own title, as in MinerU papers.
+	if err := os.WriteFile(docPath(c, "b.md"), []byte("# b.md\n\n## Setup\n\nstable evidence too\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if r, err := c.Sync(ctx); err != nil || r.Failed > 0 {
 		t.Fatalf("sync: %+v %v", r, err)
 	}
@@ -642,7 +646,15 @@ func TestRerankSeesTitleAndSection(t *testing.T) {
 	if _, err = c.Query(ctx, "evidence", QueryOptions{RequireRerank: true}); err != nil {
 		t.Fatal(err)
 	}
-	if len(texts) == 0 || !strings.HasPrefix(texts[0], "a.md > Paper / Complexity Analysis\n\n") {
-		t.Fatalf("reranker texts: %q", texts)
+	want := map[string]bool{"a.md > Paper / Complexity Analysis\n\n": false, "b.md / Setup\n\n": false}
+	for _, text := range texts {
+		for prefix := range want {
+			want[prefix] = want[prefix] || strings.HasPrefix(text, prefix)
+		}
+	}
+	for prefix, seen := range want {
+		if !seen {
+			t.Fatalf("no reranker text starts with %q: %q", prefix, texts)
+		}
 	}
 }

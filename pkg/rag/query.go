@@ -265,11 +265,16 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 		}
 		// Prefix "title > section" as indexing did for the embedding, so the
 		// reranker can tell which paper a shared section such as Complexity
-		// Analysis belongs to.
+		// Analysis belongs to. MinerU sections already start with the paper
+		// title; the embedding keeps that repeat, which helped vector recall,
+		// but the reranker reads the title once.
 		docs := make([]model.RerankDoc, len(hits))
 		for i, h := range hits {
-			text := h.Chunk.Content
-			if head := heading(titles[h.Chunk.Path], h.Chunk.Section); head != "" {
+			text, title := h.Chunk.Content, titles[h.Chunk.Path]
+			if top, _, _ := strings.Cut(deref(h.Chunk.Section), " / "); strings.EqualFold(top, title) {
+				title = ""
+			}
+			if head := heading(title, h.Chunk.Section); head != "" {
 				text = head + "\n\n" + text
 			}
 			docs[i] = model.RerankDoc{ID: h.Chunk.ID, Text: text}
