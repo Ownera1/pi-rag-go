@@ -1,6 +1,8 @@
 name: Go CI
 on:
+  # Branch pushes run as pull requests; release tags run in release.yml.
   push:
+    branches: [main]
   pull_request:
 permissions:
   contents: read

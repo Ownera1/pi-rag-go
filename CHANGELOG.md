@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+No rebuild needed: v0.6.x indexes stay compatible.
+
+- Release binaries compile SQLite and sqlite-vec with optimization. `scripts/cgo-flags.sh` set `CGO_CFLAGS` to header paths only, which replaced Go's default `-O2 -g`, so the bundled C code was built at `-O0` in releases, CI and the documented source build; it now keeps `-O2 -g` unless `CGO_CFLAGS` is already set. Same results, less time: on a synthetic 30,000-chunk index (500 Markdown files, 1024 dimensions, local stub embedder), one `rag query` took 24 ms instead of 42 ms in `bm25` mode, 65 ms instead of 107 ms in `hybrid` and 114 ms instead of 453 ms in `literal`, and indexing the 500 files used 8.4 s of CPU instead of 14.5 s. On the real six-paper workspace (760 chunks), a `literal` query took 18 ms instead of 38 ms.
+
 ## v0.6.5 (2026-10-09)
 
 No rebuild needed: v0.6.x indexes stay compatible. TUI fixes only.
