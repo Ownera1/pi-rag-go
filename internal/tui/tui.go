@@ -489,7 +489,7 @@ const minWidth, minHeight = 40, 14
 // value columns before the fixed impact tag column, shrinking names first on
 // narrow terminals.
 func columns(w int) (nameW, valueW int) {
-	nameW = min(25, max(12, w-3-tagW-14))
+	nameW = min(29, max(12, w-3-tagW-14))
 	return nameW, w - 3 - nameW - tagW
 }
 
