@@ -220,6 +220,9 @@ func pageRef(ctx context.Context, b []byte) ([]model.Block, error) {
 
 // pageSource returns the legacy MiddleJson beside a MinerU export, whose
 // cross-page marks correct the export's page numbers, or "" when none exists.
+// The export's own page numbers stand without it, so one past the document
+// size limit (a long book's span coordinates) is skipped rather than failing
+// the document.
 func pageSource(path string) string {
 	dir := filepath.Dir(path)
 	entries, _ := os.ReadDir(dir)
@@ -227,6 +230,9 @@ func pageSource(path string) string {
 	for _, e := range entries {
 		name := e.Name()
 		if !e.Type().IsRegular() {
+			continue
+		}
+		if info, err := e.Info(); err != nil || info.Size() > MaxDocumentBytes {
 			continue
 		}
 		if name == "layout.json" {

@@ -516,6 +516,21 @@ func TestLayoutCrossPagePages(t *testing.T) {
 	if err != nil || fmt.Sprint(pages(d.Blocks)) != "[[1 1] [1 2] [2 2] [2 2]]" {
 		t.Fatalf("Markdown paged by layout.json: %v err=%v", pages(d.Blocks), err)
 	}
+	// An oversized layout.json, as a long book's can be, is skipped.
+	big, err := os.OpenFile(filepath.Join(dir, "layout.json"), os.O_WRONLY|os.O_TRUNC, 0)
+	if err == nil {
+		err = big.Truncate(MaxDocumentBytes + 1)
+		big.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, err = Parse(context.Background(), list); err != nil || fmt.Sprint(pages(d.Blocks)) != "[[1 1] [1 1] [2 2]]" {
+		t.Fatalf("oversized layout.json: %v err=%v", pages(d.Blocks), err)
+	}
+	if fp, err := InputFingerprint(context.Background(), list); err != nil || fp != d.Hash {
+		t.Fatalf("oversized layout.json fingerprint: %v", err)
+	}
 	// A layout.json from another run leaves the content list's own pages.
 	writeDocument(t, filepath.Join(dir, "layout.json"), `{"pdf_info":[{"page_idx":0,"para_blocks":[{"type":"text","lines":[{"spans":[{"type":"text","content":"An unrelated paper about protein folding and molecular dynamics."}]}]}]}]}`)
 	if d, err = Parse(context.Background(), list); err != nil || fmt.Sprint(pages(d.Blocks)) != "[[1 1] [1 1] [2 2]]" {
