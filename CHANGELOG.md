@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `rag eval` reports the `rerank` mode's `candidateRecall`: Recall over all 30 hybrid candidates the reranker orders (`candidateTopK` in the report), per question and on average. Recall@5 alone could not tell a label the reranker saw and ranked too low from one that never reached it, so it did not show whether to improve the candidates or the reranking. The rerank query now keeps every candidate and the evaluator scores the top 5 of them; rerank scores do not depend on how many results are kept. On the real six-paper workspace (154 questions, voyage `rerank-3`), every question's Recall@5 and reciprocal rank in all four modes matched the v0.6.7 baseline (rerank 0.942 / 0.849), and `candidateRecall` was 0.981: of the 9 rerank misses, 6 were among the candidates and 3 were not.
+
 ## v0.6.7 (2026-10-09)
 
 No rebuild needed: v0.6.x indexes stay compatible. Evaluation and provider retries only.
