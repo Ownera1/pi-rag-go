@@ -1,7 +1,10 @@
 package command
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -13,6 +16,9 @@ import (
 	"strings"
 
 	"github.com/Ownera1/rag-go/internal/evaluate"
+	"github.com/Ownera1/rag-go/internal/model"
+	"github.com/Ownera1/rag-go/internal/version"
+	"github.com/Ownera1/rag-go/internal/workspace"
 	"github.com/Ownera1/rag-go/pkg/rag"
 )
 
@@ -40,12 +46,11 @@ func Evaluate(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if *dataset == "" {
 		return errors.New("--dataset is required")
 	}
-	f, err := os.Open(*dataset)
+	data, err := os.ReadFile(*dataset)
 	if err != nil {
 		return err
 	}
-	cases, err := evaluate.ReadCases(f)
-	f.Close()
+	cases, err := evaluate.ReadCases(bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -69,6 +74,20 @@ func Evaluate(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if status.NeedsSync || status.NeedsRebuild {
 		return errors.New("evaluation requires a synchronized compatible index; run rag sync or rag rebuild")
 	}
+	cfg, err := model.LoadConfig(filepath.Join(workspace.Store(core.WorkspaceDir()), "config.json"))
+	if err != nil {
+		return err
+	}
+	docs, err := core.Documents(ctx)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(data)
+	env := &evaluate.Environment{Version: version.Version + " (" + version.Commit + ")", Config: cfg, ActiveDB: status.ActiveDB,
+		Documents: map[string]string{}, DatasetSHA256: hex.EncodeToString(sum[:])}
+	for _, d := range docs {
+		env.Documents[d.ID] = d.Version
+	}
 	query := func(ctx context.Context, text string, options rag.QueryOptions) (rag.QueryResult, error) {
 		options.DisableSync = true
 		return core.Query(ctx, text, options)
@@ -81,6 +100,7 @@ func Evaluate(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
+	report.Environment = env
 	b, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return err

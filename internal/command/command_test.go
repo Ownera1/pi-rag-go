@@ -3,8 +3,10 @@ package command
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -320,5 +322,64 @@ func TestWorkspaceRegistryNamesAllAndRemove(t *testing.T) {
 	}
 	if _, err = run("workspace", "remove", "y/papers"); err == nil {
 		t.Fatal("removed an unregistered workspace")
+	}
+}
+
+func TestEvalReportRecordsEnvironment(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct{ Input []string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		data := []any{}
+		for i := range body.Input {
+			data = append(data, map[string]any{"index": i, "embedding": []float32{1, 0}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "documents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "documents", "paper.md"), []byte("# Method\n\nThe channel prior is updated each iteration.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	initTest(t, root, "--embedding-type", "openai", "--model", "fixture", "--base-url", server.URL, "--dimensions", "2", "--api-key-env=")
+	line := `{"id":"q1","query":"channel prior","relevant":[{"pathSuffix":"paper.md","contains":"channel prior"}]}` + "\n"
+	dataset := filepath.Join(t.TempDir(), "q.jsonl")
+	if err := os.WriteFile(dataset, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"sync", "-w", root}, strings.NewReader(""), &out, &stderr); err != nil {
+		t.Fatalf("sync: %s %v", stderr.String(), err)
+	}
+	out.Reset()
+	if err := Run(context.Background(), []string{"eval", "--workspace", root, "--dataset", dataset, "--modes", "bm25"}, strings.NewReader(""), &out, &stderr); err != nil {
+		t.Fatalf("eval: %s %v", stderr.String(), err)
+	}
+	var report struct {
+		Environment struct {
+			Version       string
+			Config        struct{ Embedding struct{ Model string } }
+			ActiveDB      string
+			Documents     map[string]string
+			DatasetSHA256 string
+		}
+		Summaries []struct{ RecallAtK float64 }
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	env := report.Environment
+	if env.Version == "" || env.Config.Embedding.Model != "fixture" || env.ActiveDB == "" || len(env.Documents) != 1 || report.Summaries[0].RecallAtK != 1 {
+		t.Fatalf("environment %+v summaries %+v", env, report.Summaries)
+	}
+	for _, v := range env.Documents {
+		if v == "" {
+			t.Fatal("empty document version")
+		}
+	}
+	if env.DatasetSHA256 != fmt.Sprintf("%x", sha256.Sum256([]byte(line))) {
+		t.Fatalf("dataset hash %s", env.DatasetSHA256)
 	}
 }
