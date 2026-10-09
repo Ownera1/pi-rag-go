@@ -18,11 +18,12 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Ownera1/rag-go/internal/chunk"
 	"github.com/Ownera1/rag-go/internal/model"
 	"github.com/Ownera1/rag-go/internal/workspace"
 )
 
-const ParserVersion = "document-blocks-v8"
+const ParserVersion = "document-blocks-v9"
 const MaxDocumentBytes = 64 << 20
 
 type Manifest struct {
@@ -280,21 +281,13 @@ func FigureChunks(ctx context.Context, path string, chunks []string) (map[int][]
 	if !IsMinerUFile(path) || len(chunks) == 0 {
 		return nil, nil
 	}
-	b, err := readFile(path)
+	// The blocks as indexing saw them, with their pages and fixes, in the
+	// order it merged them, so each lands in the chunk that holds it.
+	d, err := Parse(ctx, path)
 	if err != nil {
 		return nil, err
 	}
-	blocks, err := ParseMinerU(ctx, b)
-	if err != nil {
-		return nil, err
-	}
-	if fix, err := fixes(path); err != nil {
-		return nil, err
-	} else if fix != nil {
-		if blocks, err = applyFixes(blocks, fix); err != nil {
-			return nil, err
-		}
-	}
+	blocks := chunk.Reading(d.Blocks)
 	ref := make([]model.Block, len(chunks))
 	for i, text := range chunks {
 		n := i + 1 // alignPages reports 0 for "not found"

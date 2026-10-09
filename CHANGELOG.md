@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- MinerU figure captions get chunks of their own, and a figure or table that the export places inside a paragraph moves after the text that continues past it. MinerU lists a figure where it sits on the page, so its caption landed mid-sentence in whatever paragraph surrounded it, or was cut from its number by a chunk boundary ("Fig. 3." ending one chunk, the caption opening the next). In the six real papers, 40 of 97 captioned figures split a paragraph on their page, and "Fig. 2. An illustration of the CKM construction framework." sat between "neighboring" and "BSs can store" in a chunk on assumptions, where no search for the framework diagram found it. `rag read` locates figure images in the same order, so all 120 images of the six papers are still listed and 86 instead of 64 sit on a chunk that opens with their caption. On a rebuilt copy of the real workspace (804 chunks instead of 760), over the 48 questions whose labelled passage changed plus 15 unchanged controls: rerank Recall@5 0.974 → 0.989, the framework diagram now ranked first, candidates@30 0.984 → 1.000 and MRR 0.914 → 0.905; hybrid 0.870 / 0.729 → 0.870 / 0.739; vector 0.892 / 0.731 → 0.892 / 0.719; bm25 0.497 / 0.364 → 0.466 / 0.334, since a caption no longer lends its words to the paragraph around it. Requires `rag rebuild`.
+
 ## v0.6.8 (2026-10-09)
 
 No rebuild needed: v0.6.x indexes stay compatible. Hybrid fusion, rerank input, the MCP query description and evaluation.
