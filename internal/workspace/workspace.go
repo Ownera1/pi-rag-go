@@ -17,6 +17,9 @@ import (
 
 func Store(root string) string { return filepath.Join(root, ".rag-go") }
 
+// ErrNotFound reports a directory with no workspace at or above it.
+var ErrNotFound = errors.New("no rag-go workspace")
+
 // Discover uses the nearest workspace. An explicit path never searches parents.
 func Discover(explicit string) (string, error) {
 	if explicit != "" {
@@ -49,10 +52,10 @@ func discover(start string, walk bool) (string, error) {
 			return "", err
 		}
 		if !walk {
-			return "", fmt.Errorf("no rag-go workspace at %s; run rag init", start)
+			return "", fmt.Errorf("%w at %s; run rag init", ErrNotFound, start)
 		}
 		if filepath.Dir(root) == root {
-			return "", fmt.Errorf("no rag-go workspace at or above %s; run rag init", start)
+			return "", fmt.Errorf("%w at or above %s; run rag init", ErrNotFound, start)
 		}
 		root = filepath.Dir(root)
 	}
@@ -68,12 +71,17 @@ func Lock(ctx context.Context, root string, write bool) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
+	return flock(ctx, f, mode)
+}
+
+// flock waits, cancellably, for a lock on f and closes f if it fails.
+func flock(ctx context.Context, f *os.File, mode int) (func(), error) {
 	for {
-		if err = ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			f.Close()
 			return nil, err
 		}
-		err = syscall.Flock(int(f.Fd()), mode|syscall.LOCK_NB)
+		err := syscall.Flock(int(f.Fd()), mode|syscall.LOCK_NB)
 		if err == nil {
 			return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
 		}

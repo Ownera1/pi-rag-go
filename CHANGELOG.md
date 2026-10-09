@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Commands reach any workspace from anywhere. `rag init` lists the workspace in `~/.config/rag-go/workspaces.json`, and `-w NAME` (short for `--workspace`) selects it by its directory name, or `parent/name` when two share one. `rag sync --all`, `rag status --all` and `rag clean --all` run on every listed workspace, continue past failures and exit non-zero if any failed. `rag workspace list|add|remove` shows and edits the list; workspaces created before this release need `rag workspace add PATH` (or `rag init` again) once. Outside a workspace, the error now names the listed workspaces. The list holds only paths; each workspace keeps its own data, configuration and credentials. On three scratch workspaces built from real MinerU papers, run from a directory outside all of them: `sync --all` skipped the 3 unchanged papers, then removed only the paper deleted from one workspace's documents; a workspace whose `.rag-go` was deleted showed as `missing` and made `sync --all` exit 1 after syncing the others; 12 parallel `rag init` runs registered all 12.
+
 ## v0.6.3 (2026-10-08)
 
 No rebuild needed: v0.6.x indexes stay compatible. The first rebuild after upgrading deletes every generation except the new and the previous one.

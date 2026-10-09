@@ -257,3 +257,68 @@ func TestInitProviderProbeAndCLIErrorPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkspaceRegistryNamesAllAndRemove(t *testing.T) {
+	t.Setenv("RAG_GO_CONFIG_DIR", t.TempDir())
+	base := t.TempDir()
+	a, b, c := filepath.Join(base, "x", "papers"), filepath.Join(base, "y", "papers"), filepath.Join(base, "notes")
+	for _, root := range []string{a, b, c, a} {
+		initTest(t, root)
+	}
+	run := func(args ...string) (string, error) {
+		var out, stderr bytes.Buffer
+		err := Run(context.Background(), args, strings.NewReader(""), &out, &stderr)
+		return out.String(), err
+	}
+	names := func() []string {
+		out, err := run("workspace", "list")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var list []workspace.Entry
+		if err = json.Unmarshal([]byte(out), &list); err != nil {
+			t.Fatal(err)
+		}
+		got := []string{}
+		for _, e := range list {
+			got = append(got, e.Name)
+		}
+		return got
+	}
+	if got := names(); !reflect.DeepEqual(got, []string{"x/papers", "y/papers", "notes"}) {
+		t.Fatalf("names %v", got)
+	}
+	t.Chdir(base)
+	if _, err := run("status"); !errors.Is(err, workspace.ErrNotFound) || !strings.Contains(err.Error(), "x/papers, y/papers, notes") {
+		t.Fatalf("outside a workspace: %v", err)
+	}
+	if out, err := run("status", "-w", "notes"); err != nil || !strings.Contains(out, `"workspaceDir":"`+c+`"`) {
+		t.Fatalf("status -w notes: %s %v", out, err)
+	}
+	if _, err := run("status", "--all", "-w", "notes"); err == nil {
+		t.Fatal("accepted --all with -w")
+	}
+	if err := os.RemoveAll(workspace.Store(b)); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run("sync", "--all")
+	if err == nil || err.Error() != "1 of 3 workspaces failed" {
+		t.Fatalf("sync --all: %v", err)
+	}
+	var results []workspaceResult
+	if err = json.Unmarshal([]byte(out), &results); err != nil || len(results) != 3 || results[0].Error != "" || results[1].Error == "" || results[2].Error != "" {
+		t.Fatalf("sync --all results: %s %v", out, err)
+	}
+	if _, err = run("workspace", "remove", "y/papers"); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); !reflect.DeepEqual(got, []string{"papers", "notes"}) {
+		t.Fatalf("names after remove %v", got)
+	}
+	if _, err = run("sync", "--all"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run("workspace", "remove", "y/papers"); err == nil {
+		t.Fatal("removed an unregistered workspace")
+	}
+}

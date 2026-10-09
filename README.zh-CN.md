@@ -50,7 +50,9 @@ my-project/
     └── indexes/                # 保留的索引版本
 ```
 
-命令从当前目录向上查找最近的 `.rag-go/config.json`。`--workspace PATH` 精确选择指定工作区；嵌套工作区相互独立。`.rag-go` 内置的忽略文件将配置、凭据和索引排除在 Git 之外，文档源文件由用户自行管理。
+命令从当前目录向上查找最近的 `.rag-go/config.json`。`--workspace PATH`（或 `-w`）精确选择指定工作区；嵌套工作区相互独立。
+
+`rag init` 还会把工作区登记到 `~/.config/rag-go/workspaces.json`，之后在任何目录都能按名字指定它：`rag sync -w papers`。名字取目录名，两个工作区同名时加上上级目录（`lab1/papers`）；`rag workspace list` 列出名字，配置已不存在的工作区标为 `missing`。登记的名字优先于相对路径，要指目录请写 `./papers`。`rag sync --all`、`rag status --all` 和 `rag clean --all` 依次处理所有登记的工作区，遇到失败继续，最后只要有失败就返回非零；rebuild 不提供 `--all`，因为它会重新嵌入全部文档。在工作区之外运行时，报错会列出已登记的名字。`rag workspace add [PATH]` 登记已有工作区（默认当前工作区），`rag workspace remove NAME|PATH` 只删除登记、不动工作区。登记表只记录路径，数据、配置和凭据仍在各自的工作区里；`rag uninstall --purge` 会一并删除登记表。`.rag-go` 内置的忽略文件将配置、凭据和索引排除在 Git 之外，文档源文件由用户自行管理。
 
 常用操作：
 
@@ -62,6 +64,8 @@ my-project/
 | `rag status` | 查看工作区、索引和可选的 Zotero catalog 状态 |
 | `rag rebuild` | 构建新索引并原子切换，失败时保留原索引 |
 | `rag clean --keep 3` | 预览旧索引清理；加 `--confirm` 才执行删除 |
+| `rag sync --all` / `rag status --all` | 依次处理所有登记的工作区 |
+| `rag workspace list` | 列出登记的工作区及其名字，配合 `-w NAME` 使用 |
 | `rag tui` | 交互式面板：查看索引状态、编辑并保存工作区配置、带进度条运行 sync / rebuild / clean |
 
 `rag sync` 递归扫描单一文档根目录，并对 canonical 内容及 Manifest metadata 计算哈希。未变化的文档跳过解析和 embedding。每个成功替换在事务内完成；失败文档保留原有 chunks。只有扫描完整、成功且稳定时才应用删除差集。处理期间发生变化的文件留待下次同步。
