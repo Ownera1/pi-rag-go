@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.6.8 (2026-10-09)
+
+No rebuild needed: v0.6.x indexes stay compatible. Hybrid fusion, rerank input, the MCP query description and evaluation.
 
 - `rag eval` relevance labels can list alternatives under `anyOf`: such a label is found when any of them matches, for an answer stated in more than one passage, such as a list that continues into the next chunk or a result two papers report. Separate labels must still all be found. On the real six-paper workspace, four of the six questions that rerank missed were answered by a passage next to the labelled one: the list of simulation baselines starts one chunk before the labelled half, Assumption 1(a) sits beside the labelled paragraph on fixed channel parameters, the user covariance is built in (45)–(46) rather than factorized in (53), and a noise-model question that names no paper is answered by two other papers' system models. With those passages accepted, rerank Recall@5 on the 154 questions is 0.987 instead of 0.961 and MRR 0.900 instead of 0.878, and no other question's rerank score changed. A dataset that uses `anyOf` needs this version; earlier ones reject it as an unknown field.
 - The `rag_query` tool description asks agents to write queries in the documents' language, translating a question asked in another, since keyword search matches only the documents' own words. On the real six-paper workspace (English papers), the 44 Chinese questions translated into English, against the originals with the same build: hybrid, the mode of workspaces without a reranker, went from Recall@5 / MRR 0.909 / 0.712 to 0.932 / 0.766; rerank from 0.909 / 0.819 to 0.932 / 0.815, one more question answered; vector from 0.909 / 0.750 to 0.932 / 0.744. The two Chinese questions whose answer never reaches the 30 rerank candidates miss in English too.
