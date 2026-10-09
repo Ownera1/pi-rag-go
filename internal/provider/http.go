@@ -18,6 +18,7 @@ import (
 
 type HTTP struct {
 	credential string
+	refusal    error
 	cfg        model.ProviderConfig
 	client     *http.Client
 	retries    int
@@ -46,11 +47,18 @@ func NewHTTP(cfg model.ProviderConfig, timeoutMs, retries int, batchSizes ...int
 // other goroutines.
 func (p *HTTP) SetCredential(key string) { p.credential = key }
 
+// Refuse makes every request fail with err before anything is sent; nil
+// allows requests. Call before publishing the provider to other goroutines.
+func (p *HTTP) Refuse(err error) { p.refusal = err }
+
 func (p *HTTP) Model() string { return p.cfg.Model }
 
 func (p *HTTP) Dimensions() int { return p.cfg.Dimensions }
 
 func (p *HTTP) post(ctx context.Context, path string, body any, out any) error {
+	if p.refusal != nil {
+		return p.refusal
+	}
 	data, err := json.Marshal(body)
 	if err != nil {
 		return err

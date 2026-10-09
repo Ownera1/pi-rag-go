@@ -182,6 +182,22 @@ func TrustedEndpoint(p model.ProviderConfig) (bool, error) {
 	return installed && p.BaseURL == g.Embedding.BaseURL && p.APIKeyEnv == g.Embedding.APIKeyEnv, err
 }
 
+// CheckEndpoint refuses an endpoint the user never chose. A cloned repository
+// may carry .rag-go/config.json, so a workspace not registered on this machine
+// by rag init or rag workspace add sends documents and queries only to a
+// trusted endpoint.
+func CheckEndpoint(root string, p model.ProviderConfig) error {
+	trusted, err := TrustedEndpoint(p)
+	if err != nil || trusted {
+		return err
+	}
+	registered, err := Registered(root)
+	if err != nil || registered {
+		return err
+	}
+	return fmt.Errorf("refusing to send text to %s: %s is not a registered workspace; if you chose this endpoint, run rag workspace add %s", p.BaseURL, root, root)
+}
+
 // Credential resolves p's key from the environment, the workspace, then the
 // user-wide file. A workspace config may come from a cloned repository, so the
 // environment and user-wide file serve only a trusted endpoint; workspace

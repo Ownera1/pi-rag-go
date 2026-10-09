@@ -192,6 +192,59 @@ func TestWorkspaceConfigCannotRedirectAmbientCredentials(t *testing.T) {
 	}
 }
 
+func TestUnregisteredWorkspaceSendsTextOnlyToTrustedEndpoints(t *testing.T) {
+	t.Setenv("RAG_GO_CONFIG_DIR", t.TempDir())
+	ctx := context.Background()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]any{"index": 0, "embedding": []float32{1, 0}}}})
+	}))
+	defer server.Close()
+	cfg := DefaultConfig()
+	cfg.Chunking.Mode = "legacy"
+	cfg.Embedding = ProviderConfig{Type: "openai", Model: "fixture", Dimensions: 2, BaseURL: server.URL}
+	c := configuredCore(t, t.TempDir(), cfg, nil)
+	defer c.Close()
+	root := c.WorkspaceDir()
+	// A cloned repository's configuration names an endpoint nobody chose here.
+	if err := workspace.Unregister(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	note := docPath(c, "note.txt")
+	sourceFile(t, note, []byte("private"))
+	for _, op := range []func(context.Context) (IndexResult, error){c.Sync, c.Rebuild} {
+		if _, err := op(ctx); err == nil || !strings.Contains(err.Error(), "rag workspace add "+root) {
+			t.Fatalf("unregistered: %v", err)
+		}
+	}
+	if _, err := c.Query(ctx, "private", QueryOptions{Mode: "bm25"}); err == nil || !strings.Contains(err.Error(), "rag workspace add") {
+		t.Fatalf("query: %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("text sent to an untrusted endpoint: %d calls", calls.Load())
+	}
+	// rag workspace add trusts it, and the next query syncs without a cooldown.
+	if err := workspace.Register(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	if q, err := c.Query(ctx, "private", QueryOptions{Mode: "bm25"}); err != nil || q.Sync == nil || q.Sync.Indexed != 1 || len(q.Hits) != 1 {
+		t.Fatalf("registered: %+v %v", q, err)
+	}
+	// So does the endpoint rag install recorded, registered or not.
+	if err := workspace.Unregister(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	dir, _ := workspace.GlobalDir()
+	if err := workspace.AtomicJSON(filepath.Join(dir, "config.json"), cfg); err != nil {
+		t.Fatal(err)
+	}
+	sourceFile(t, note, []byte("private again"))
+	if r, err := c.Sync(ctx); err != nil || r.Indexed != 1 {
+		t.Fatalf("installed endpoint: %+v %v", r, err)
+	}
+}
+
 func TestCanonicalArtifactRemovalRetiresOldRepresentationOnPartialFailure(t *testing.T) {
 	c := openTest(t, t.TempDir(), fakeEmbedding{})
 	defer c.Close()

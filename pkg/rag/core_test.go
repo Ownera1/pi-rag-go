@@ -61,6 +61,10 @@ func configuredCore(t *testing.T, root string, cfg Config, p EmbeddingProvider) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Like rag init, so the endpoint in cfg counts as chosen on this machine.
+	if err = workspace.Register(context.Background(), c.WorkspaceDir()); err != nil {
+		t.Fatal(err)
+	}
 	return c
 }
 func openTest(t *testing.T, root string, p EmbeddingProvider) *Core {

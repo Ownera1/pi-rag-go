@@ -211,8 +211,9 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 	if err = workspace.AtomicFile(filepath.Join(storeDir, ".gitignore"), []byte("*\n"), 0600); err != nil {
 		return err
 	}
-	// The registry only lets commands name this workspace from anywhere, so
-	// failing to update it does not fail initialization.
+	// Registering lets commands name this workspace from anywhere and trusts
+	// the endpoints chosen here. Failing to register does not fail
+	// initialization; sync then refuses an untrusted endpoint and says so.
 	if e := workspace.Register(ctx, root); e != nil {
 		fmt.Fprintf(stderr, "warning: workspace not registered (%v); run rag workspace add later\n", e)
 	}

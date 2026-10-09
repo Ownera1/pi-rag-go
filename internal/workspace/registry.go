@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 )
 
 // The registry lists workspaces by absolute path in GlobalDir's
 // workspaces.json, like git maintenance's maintenance.repo, so commands can
 // name a workspace from anywhere. Names are derived from the paths on read.
+// Listing also trusts the workspace's endpoints (see CheckEndpoint).
 
 // Entry is a registered workspace. Missing means its configuration is gone.
 type Entry struct {
@@ -96,6 +98,16 @@ func Resolve(arg string) (string, error) {
 		}
 	}
 	return arg, nil
+}
+
+// Registered reports whether the absolute path root is listed.
+func Registered(root string) (bool, error) {
+	path, err := registryPath()
+	if err != nil {
+		return false, err
+	}
+	paths, err := readRegistry(path)
+	return slices.Contains(paths, root), err
 }
 
 // Register adds the workspace at the absolute path root, if not yet listed.
