@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Embedding and rerank retries wait as long as the provider's `Retry-After` header asks (seconds or an HTTP date, at most one minute), and otherwise back off with random jitter (0.5–1 s, 1–2 s, 2–4 s, …) instead of a fixed 1, 2, 4 s that ignored the header. A rate limit longer than the retries' total, 7 s with the default 3 retries, failed every document caught in it, and parallel indexing workers retried in lockstep. Against a local stub endpoint that answered 429 with `Retry-After: 10` for 10 s from its third request, syncing the six real papers failed 2 of them after 12 rejected requests on the previous build; this build waited out the window after 2 rejections and indexed all six (759 chunks) in the same 10.3 s.
+
 ## v0.6.6 (2026-10-09)
 
 No rebuild needed: v0.6.x indexes stay compatible. A workspace using an endpoint other than Voyage's default or the one `rag install` recorded must be registered on this machine: one created before v0.6.4 needs `rag workspace add PATH` once, and sync and queries say so.

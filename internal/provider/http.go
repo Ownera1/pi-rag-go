@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -104,7 +106,14 @@ func (p *HTTP) post(ctx context.Context, path string, body any, out any) error {
 		if !retry || attempt == p.retries {
 			return err
 		}
+		// Jitter keeps concurrent indexing workers from retrying in lockstep.
 		delay := time.Duration(min(1<<attempt, 8)) * time.Second
+		delay = delay/2 + rand.N(delay/2)
+		if res != nil {
+			if d, ok := retryAfter(res.Header.Get("Retry-After"), time.Now()); ok {
+				delay = d
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -112,6 +121,21 @@ func (p *HTTP) post(ctx context.Context, path string, body any, out any) error {
 		}
 	}
 	return err
+}
+
+// retryAfter reads a Retry-After header, in seconds or as an HTTP date,
+// capped so a misbehaving server cannot stall indexing.
+func retryAfter(v string, now time.Time) (time.Duration, bool) {
+	v = strings.TrimSpace(v)
+	var d time.Duration
+	if s, err := strconv.Atoi(v); err == nil {
+		d = time.Duration(s) * time.Second
+	} else if t, err := http.ParseTime(v); err == nil {
+		d = t.Sub(now)
+	} else {
+		return 0, false
+	}
+	return min(max(d, 0), time.Minute), true
 }
 
 func normalize(v []float32, dim int) ([]float32, error) {
