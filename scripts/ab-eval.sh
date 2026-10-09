@@ -22,7 +22,7 @@ for side in base new; do
 	echo "== $side: rebuild" >&2
 	"$tmp/rag-$side" rebuild --workspace "$ws" >/dev/null
 	"$tmp/rag-$side" eval --workspace "$ws" --dataset "$dataset" --top-k "$k" \
-		--modes bm25,vector,hybrid --output "$out/$side.json" >/dev/null
+		--output "$out/$side.json" >/dev/null
 done
 
 python3 - "$out/base.json" "$out/new.json" <<'EOF'

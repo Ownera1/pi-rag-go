@@ -325,15 +325,18 @@ func TestWorkspaceRegistryNamesAllAndRemove(t *testing.T) {
 	}
 }
 
-func TestEvalReportRecordsEnvironment(t *testing.T) {
+func TestEvalReportEnvironmentAndDefaultModes(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct{ Input []string }
+		var body struct{ Input, Documents []string }
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		data := []any{}
+		data, results := []any{}, []any{}
 		for i := range body.Input {
 			data = append(data, map[string]any{"index": i, "embedding": []float32{1, 0}})
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+		for i := range body.Documents {
+			results = append(results, map[string]any{"index": i, "relevance_score": 1})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data, "results": results})
 	}))
 	defer server.Close()
 	root := t.TempDir()
@@ -381,5 +384,44 @@ func TestEvalReportRecordsEnvironment(t *testing.T) {
 	}
 	if env.DatasetSHA256 != fmt.Sprintf("%x", sha256.Sum256([]byte(line))) {
 		t.Fatalf("dataset hash %s", env.DatasetSHA256)
+	}
+	// Without --modes, rerank joins the baselines once a reranker is configured.
+	modes := func() string {
+		t.Helper()
+		out.Reset()
+		if err := Run(context.Background(), []string{"eval", "--workspace", root, "--dataset", dataset}, strings.NewReader(""), &out, &stderr); err != nil {
+			t.Fatalf("eval: %s %v", stderr.String(), err)
+		}
+		var r struct{ Summaries []struct{ Mode string } }
+		if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+			t.Fatal(err)
+		}
+		got := []string{}
+		for _, s := range r.Summaries {
+			got = append(got, s.Mode)
+		}
+		return strings.Join(got, ",")
+	}
+	if got := modes(); got != "bm25,vector,hybrid" {
+		t.Fatalf("default modes without a reranker: %s", got)
+	}
+	path := filepath.Join(workspace.Store(root), "config.json")
+	b, err := os.ReadFile(path)
+	var cfg map[string]any
+	if err == nil {
+		err = json.Unmarshal(b, &cfg)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg["reranker"] = map[string]any{"type": "http", "model": "fixture", "baseUrl": server.URL}
+	if b, err = json.Marshal(cfg); err == nil {
+		err = os.WriteFile(path, b, 0o600)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := modes(); got != "bm25,vector,hybrid,rerank" {
+		t.Fatalf("default modes with a reranker: %s", got)
 	}
 }

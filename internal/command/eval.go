@@ -35,7 +35,7 @@ func Evaluate(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	flags.SetOutput(stderr)
 	root := flags.String("workspace", "", "workspace root")
 	dataset := flags.String("dataset", "", "annotated JSONL evaluation dataset")
-	modes := flags.String("modes", "bm25,vector,hybrid", "comma-separated modes; add rerank when a reranker is configured")
+	modes := flags.String("modes", "", "comma-separated modes (default bm25,vector,hybrid, plus rerank when a reranker is configured)")
 	topK := flags.Int("top-k", 5, "retrieval evaluation cutoff")
 	output := flags.String("output", "", "optional JSON report path")
 	embRate := flags.String("embedding-usd-per-million-tokens", "", "optional rate for estimated embedding cost")
@@ -91,6 +91,12 @@ func Evaluate(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	query := func(ctx context.Context, text string, options rag.QueryOptions) (rag.QueryResult, error) {
 		options.DisableSync = true
 		return core.Query(ctx, text, options)
+	}
+	if *modes == "" {
+		*modes = "bm25,vector,hybrid"
+		if cfg.Reranker.Type != "none" {
+			*modes += ",rerank"
+		}
 	}
 	selected := strings.Split(*modes, ",")
 	for i := range selected {

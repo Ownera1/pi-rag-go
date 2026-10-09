@@ -6,7 +6,7 @@ The supplied sample contains 20 synthetic TEI passages and 20 explicit relevance
 
 1. Select a fixed corpus of actual TEI papers and sync it in a separate workspace. Use the same active generation for all modes; avoid index changes during a run.
 2. Write 20–50 realistic questions before inspecting retrieved results. Include paraphrases, mixed languages, and difficult confusable passages. Mark the relevant passages by path plus a unique text excerpt or section; verify every label against parsed chunk output. Keep unsupported questions in a separate answerability evaluation because passage Recall requires at least one label.
-3. Run `rag eval --dataset questions.jsonl --modes bm25,vector,hybrid,rerank --top-k 5 --output evaluation/runs/papers.json` against that workspace. Rerank requires a configured reranker. The first three baselines disable reranking so comparisons remain distinct.
+3. Run `rag eval --dataset questions.jsonl --top-k 5 --output evaluation/runs/papers.json` against that workspace. It evaluates `bm25`, `vector` and `hybrid`, plus `rerank` when the workspace configures a reranker; `--modes` selects others. The first three baselines disable reranking so comparisons remain distinct.
 4. Inspect per-question hits, failures and degradation before comparing aggregate scores. Repeat on a held-out set when tuning chunking, alpha, and candidate limits. Rebuild after changing chunking. To compare configs, use separate workspaces. Each report records its `environment`: build, workspace configuration, active index, every document's version and the dataset's SHA-256; compare these first when two reports disagree.
 
 Each JSONL line is an object:
