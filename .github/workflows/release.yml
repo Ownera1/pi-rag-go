@@ -40,6 +40,8 @@ jobs:
         shell: bash
         run: echo "CGO_CFLAGS=$(scripts/cgo-flags.sh)" >> "$GITHUB_ENV"
       - name: Check and test
+        # Go CI already runs these on pull requests; tags run them before publishing.
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           test -z "$(gofmt -l $(git ls-files '*.go'))"
