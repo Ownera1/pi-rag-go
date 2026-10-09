@@ -242,6 +242,14 @@ func (d *DB) SetMetadata(ctx context.Context, key, value string) error {
 	return e
 }
 
+// HasChunks reports whether the index holds any chunk, without the full
+// counts of Stats; COUNT(*) on the vec0 table scans it.
+func (d *DB) HasChunks(ctx context.Context) (bool, error) {
+	var ok bool
+	err := d.SQL.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM chunks)").Scan(&ok)
+	return ok, err
+}
+
 func (d *DB) Stats(ctx context.Context) (model.Status, error) {
 	if d == nil {
 		return model.Status{FailedFiles: []model.FileFailure{}}, nil
