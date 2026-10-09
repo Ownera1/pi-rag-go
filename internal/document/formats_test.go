@@ -606,3 +606,32 @@ func TestRagFixesCorrectPackageText(t *testing.T) {
 		t.Fatalf("stale fix accepted: %v", err)
 	}
 }
+
+func TestAddFixAppendsOnlyUniqueMatches(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "paper_content_list.json")
+	writeDocument(t, path, `[{"type":"text","text":"gain \\nu_l and \\nu_l again","page_idx":0},{"type":"text","text":"rate r_l here","page_idx":0}]`)
+	fixes := filepath.Join(dir, FixesFile)
+	writeDocument(t, fixes, "# OCR") // no trailing newline
+	for _, bad := range [][2]string{{`\nu_l`, `\nu_1`}, {"absent", "x"}, {"r_l\there", "x"}, {"rate", "rate"}, {"#", "x"}} {
+		if _, _, err := AddFix(ctx, path, bad[0], bad[1]); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+	file, line, err := AddFix(ctx, path, `and \nu_l again`, `and \nu_1 again`)
+	if err != nil || file != fixes || line != 2 {
+		t.Fatalf("file=%s line=%d err=%v", file, line, err)
+	}
+	// Later fixes see earlier ones applied, so the remaining \nu_l is unique.
+	if _, line, err = AddFix(ctx, path, `\nu_l`, `\nu_1`); err != nil || line != 3 {
+		t.Fatalf("line=%d err=%v", line, err)
+	}
+	d, err := Parse(ctx, path)
+	if err != nil || !strings.Contains(joined(d.Blocks), `gain \nu_1 and \nu_1 again`) {
+		t.Fatalf("blocks=%+v err=%v", d.Blocks, err)
+	}
+	if _, _, err := AddFix(ctx, filepath.Join(dir, "notes.md"), "a", "b"); err == nil {
+		t.Fatal("fixed a plain file")
+	}
+}

@@ -57,7 +57,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		args = append([]string{args[i]}, append(prefix, args[i+1:]...)...)
 	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "usage: rag install|uninstall|init|sync|query|list|outline|read|status|rebuild|clean|tui|zotero|connect|mcp|eval|version [--workspace PATH] [options]")
+		fmt.Fprintln(out, "usage: rag install|uninstall|init|sync|query|list|outline|read|fix|status|rebuild|clean|tui|zotero|connect|mcp|eval|version [--workspace PATH] [options]")
 		fmt.Fprintln(out, "\nGet started: rag install (once), then rag init in each project.")
 		return nil
 	}
@@ -99,7 +99,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		}
 		return tui.Run(ctx, *root)
 	}
-	if cmd != "sync" && cmd != "query" && cmd != "status" && cmd != "rebuild" && cmd != "clean" && cmd != "list" && cmd != "outline" && cmd != "read" {
+	if cmd != "sync" && cmd != "query" && cmd != "status" && cmd != "rebuild" && cmd != "clean" && cmd != "list" && cmd != "outline" && cmd != "read" && cmd != "fix" {
 		return fmt.Errorf("unknown command %q; see rag --help and the v0.2 migration guide", cmd)
 	}
 	fs := flag.NewFlagSet("rag "+cmd, flag.ContinueOnError)
@@ -107,6 +107,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 	root := fs.String("workspace", "", "explicit workspace root")
 	opts := rag.QueryOptions{}
 	read := rag.ReadOptions{}
+	fix := rag.FixOptions{}
 	before, after, from, to := 0, 0, 0, 0
 	yearFrom, yearTo := 0, 0
 	var tags, collections stringList
@@ -135,6 +136,12 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		fs.StringVar(&read.Pages, "pages", "", "page or range, such as 8-9")
 		fs.IntVar(&read.MaxTokens, "max-tokens", 0, "token budget (default 4000, max 16000)")
 		fs.StringVar(&read.Version, "version", "", "fail if the document's version differs")
+	}
+	if cmd == "fix" {
+		fs.StringVar(&fix.Document, "document", "", "document id, path or unique part of its path or title")
+		fs.StringVar(&fix.Wrong, "wrong", "", "wrong text as rag read shows it, occurring once")
+		fs.StringVar(&fix.Right, "right", "", "text as the original PDF shows it")
+		fs.StringVar(&fix.Version, "version", "", "fail if the document's version differs")
 	}
 	if cmd == "clean" {
 		fs.IntVar(&keep, "keep", 3, "total generations to retain")
@@ -193,6 +200,11 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 	case "read":
 		var r rag.ReadResult
 		if r, err = core.Read(ctx, read); err == nil {
+			result = r
+		}
+	case "fix":
+		var r rag.FixResult
+		if r, err = core.Fix(ctx, fix); err == nil {
 			result = r
 		}
 	case "status":

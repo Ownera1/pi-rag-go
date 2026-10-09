@@ -163,6 +163,46 @@ func (c *Core) Read(ctx context.Context, opts ReadOptions) (ReadResult, error) {
 	return out, ctx.Err()
 }
 
+// FixOptions replaces Wrong, text as Read shows it, with Right, the text the
+// original PDF has.
+type FixOptions struct {
+	Document string `json:"document" jsonschema:"document id, path, or a unique part of its path or title"`
+	Wrong    string `json:"wrong" jsonschema:"the wrong text exactly as rag_read shows it, within one line, occurring once in the document"`
+	Right    string `json:"right" jsonschema:"the text as the original PDF page or image shows it"`
+	Version  string `json:"version,omitempty" jsonschema:"fail if the document's version differs"`
+}
+
+// FixResult names the corrections file and the line the pair went to.
+type FixResult struct {
+	DocumentInfo
+	File string `json:"file"`
+	Line int    `json:"line"`
+}
+
+// Fix records a correction in the document's rag-fixes.tsv. It does not sync,
+// so chunk ids stay stable while reading; the next query reindexes the
+// document once for all corrections made meanwhile.
+func (c *Core) Fix(ctx context.Context, opts FixOptions) (FixResult, error) {
+	s, err := c.operation(ctx, true)
+	if err != nil {
+		return FixResult{}, err
+	}
+	defer s.close()
+	if s.db == nil {
+		return FixResult{}, errors.New("no index yet; run rag sync")
+	}
+	d, err := s.resolveDocument(ctx, opts.Document)
+	if err != nil {
+		return FixResult{}, err
+	}
+	out := FixResult{DocumentInfo: d.info}
+	if opts.Version != "" && opts.Version != d.info.Version {
+		return out, fmt.Errorf("document %s changed: version %s is now %s; read the passage again", d.info.ID, opts.Version, d.info.Version)
+	}
+	out.File, out.Line, err = document.AddFix(ctx, d.info.Path, opts.Wrong, opts.Right)
+	return out, err
+}
+
 // Outline lists a document's sections as chunk ranges for Read.
 func (c *Core) Outline(ctx context.Context, document string) (Outline, error) {
 	s, err := c.operation(ctx, false)

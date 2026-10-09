@@ -72,7 +72,7 @@ def check_stdio(binary, root, readonly):
         names = sorted(tool["name"] for tool in tools)
         expected = ["rag_list_documents", "rag_outline", "rag_query", "rag_read", "rag_status"]
         if not readonly:
-            expected += ["rag_sync", "rag_rebuild", "rag_zotero_sync", "rag_zotero_match", "rag_zotero_link"]
+            expected += ["rag_fix", "rag_sync", "rag_rebuild", "rag_zotero_sync", "rag_zotero_match", "rag_zotero_link"]
         assert names == sorted(expected), names
         query_tool = next(t for t in tools if t["name"] == "rag_query")
         assert query_tool.get("annotations", {}).get("readOnlyHint", False) == readonly
