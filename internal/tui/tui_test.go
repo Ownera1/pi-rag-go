@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,11 @@ func (fakeReranker) Rerank(context.Context, string, []model.RerankDoc, int) ([]m
 	return nil, nil
 }
 
+// open opens a workspace with fake providers, as the panel opens listed ones.
+func open(dir string) (*rag.Core, error) {
+	return rag.Open(rag.Options{WorkspaceDir: dir, Embedder: fakeEmbedding{}, Reranker: fakeReranker{}})
+}
+
 // indexed returns a synced workspace whose providers are fakes, so changing
 // provider settings exercises only configuration and compatibility.
 func indexed(t *testing.T) (*rag.Core, model.Config) {
@@ -63,7 +69,7 @@ func indexed(t *testing.T) (*rag.Core, model.Config) {
 	if err := os.WriteFile(filepath.Join(root, "documents", "note.txt"), []byte("evidence"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	core, err := rag.Open(rag.Options{WorkspaceDir: root, Embedder: fakeEmbedding{}, Reranker: fakeReranker{}})
+	core, err := open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,37 +121,80 @@ func TestImpactTagsMatchIndexCompatibility(t *testing.T) {
 	}
 }
 
+func keyMsg(k string) tea.KeyMsg {
+	switch k {
+	case "right":
+		return tea.KeyMsg{Type: tea.KeyRight}
+	case "down":
+		return tea.KeyMsg{Type: tea.KeyDown}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
+	case "ctrl+s":
+		return tea.KeyMsg{Type: tea.KeyCtrlS}
+	case "\r":
+		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "\x1b":
+		return tea.KeyMsg{Type: tea.KeyEsc}
+	}
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+}
+
 func press(t *testing.T, m *Model, keys ...string) {
 	t.Helper()
 	for _, k := range keys {
-		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
-		switch k {
-		case "right":
-			msg = tea.KeyMsg{Type: tea.KeyRight}
-		case "ctrl+s":
-			msg = tea.KeyMsg{Type: tea.KeyCtrlS}
-		case "\r":
-			msg = tea.KeyMsg{Type: tea.KeyEnter}
-		case "\x1b":
-			msg = tea.KeyMsg{Type: tea.KeyEsc}
-		}
-		_, cmd := m.Update(msg)
+		_, cmd := m.Update(keyMsg(k))
 		if cmd != nil && k == "ctrl+s" {
 			m.Update(cmd())
 		}
 	}
 }
 
+// run delivers msg and every message its commands produce, as the program
+// would, except quitting.
+func run(m *Model, msg tea.Msg) {
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if c != nil {
+				run(m, c())
+			}
+		}
+		return
+	}
+	if _, ok := msg.(tea.QuitMsg); ok || msg == nil {
+		return
+	}
+	if _, cmd := m.Update(msg); cmd != nil {
+		run(m, cmd())
+	}
+}
+
+// onScreen reports whether the cursor bar is drawn, here as its uncolored ">".
+func onScreen(view string) bool {
+	for _, l := range strings.Split(ansi.Strip(view), "\n") {
+		if strings.HasPrefix(l, " > ") {
+			return true
+		}
+	}
+	return false
+}
+
 // Every state must fit the terminal at any supported size, keep the cursor
 // on screen, and degrade to a notice below the minimum. Fitting also needs no
 // East Asian Ambiguous characters, whose width depends on terminal settings.
 func TestViewFitsTerminal(t *testing.T) {
+	t.Setenv("RAG_GO_CONFIG_DIR", t.TempDir())
 	core, _ := indexed(t)
-	m, err := New(context.Background(), core)
+	long := filepath.Join(t.TempDir(), strings.Repeat("很长的工作区名字", 6))
+	for _, dir := range []string{core.WorkspaceDir(), long} {
+		if err := workspace.Register(context.Background(), dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, err := New(context.Background(), core, open)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.Update(m.refresh()())
+	run(m, m.Init()())
 	m.draft.Documents = strings.Repeat("/very/long/documents/path", 8)
 	m.msg = bad.Render(strings.Repeat("保存失败：config.json changed outside the panel ", 4))
 	states := map[string]func(){
@@ -157,8 +206,15 @@ func TestViewFitsTerminal(t *testing.T) {
 			m.task, m.prog = "rebuild", rag.IndexProgress{Done: 37, Total: 214, Path: strings.Repeat("长文件名", 20) + ".pdf", Result: rag.IndexResult{Chunks: 1204}}
 		},
 		"help": func() { m.task = ""; m.fullHelp = true; m.cursor = len(m.fields) - 1 },
+		"list": func() { m.page = pageList },
+		"list run": func() {
+			m.task, m.runTotal, m.running = "sync", 2, long
+			m.rows[long].state, m.rows[core.WorkspaceDir()].state = "syncing", "done"
+			m.rows[core.WorkspaceDir()].failed = errors.New(strings.Repeat("embedding endpoint unreachable ", 5))
+		},
+		"list end": func() { m.task, m.runTotal = "", 0; m.at = 1 },
 	}
-	for _, name := range []string{"message", "pending", "editing", "progress", "help"} {
+	for _, name := range []string{"message", "pending", "editing", "progress", "help", "list", "list run", "list end"} {
 		states[name]()
 		for _, size := range [][2]int{{40, 14}, {66, 24}, {80, 30}, {120, 50}, {240, 80}} {
 			m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
@@ -176,7 +232,7 @@ func TestViewFitsTerminal(t *testing.T) {
 					}
 				}
 			}
-			if !strings.Contains(m.View(), "›") && !m.editing {
+			if !onScreen(m.View()) && !m.editing {
 				t.Errorf("%s %v: cursor scrolled off", name, size)
 			}
 		}
@@ -189,7 +245,7 @@ func TestViewFitsTerminal(t *testing.T) {
 
 func TestSaveWritesDraftAndRefusesOutsideEdit(t *testing.T) {
 	core, _ := indexed(t)
-	m, err := New(context.Background(), core)
+	m, err := New(context.Background(), core, open)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,5 +261,54 @@ func TestSaveWritesDraftAndRefusesOutsideEdit(t *testing.T) {
 	press(t, m, "right", "ctrl+s")
 	if cfg, _ := model.LoadConfig(configPath(core)); cfg.TopK != 6 || cfg.Alpha != 0.9 || !strings.Contains(m.msg, "changed outside") {
 		t.Fatalf("outside edit overwritten: %+v %s", cfg, m.msg)
+	}
+}
+
+// The list syncs every workspace in turn, skipping missing ones, and opens a
+// workspace only after confirming that unsaved settings are discarded.
+func TestListSyncsAllAndOpensWorkspaces(t *testing.T) {
+	t.Setenv("RAG_GO_CONFIG_DIR", t.TempDir())
+	a, _ := indexed(t)
+	b, _ := indexed(t)
+	gone := filepath.Join(t.TempDir(), "gone")
+	for _, dir := range []string{a.WorkspaceDir(), gone, b.WorkspaceDir()} {
+		if err := workspace.Register(context.Background(), dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(b.WorkspaceDir(), "documents", "more.txt"), []byte("more evidence"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(context.Background(), nil, open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(m, m.Init()())
+	if m.page != pageList || m.rows[b.WorkspaceDir()].status == nil || !m.rows[b.WorkspaceDir()].status.NeedsSync {
+		t.Fatalf("list not loaded: page %d rows %+v", m.page, m.rows)
+	}
+	run(m, keyMsg("S"))
+	ra, rb, rg := m.rows[a.WorkspaceDir()], m.rows[b.WorkspaceDir()], m.rows[gone]
+	if ra.state != "done" || ra.failed != nil || rb.state != "done" || rb.result.Indexed != 1 || rg.state != "skipped" || m.task != "" {
+		t.Fatalf("sync all: a %+v b %+v gone %+v task %q", ra, rb, rg, m.task)
+	}
+	if rb.status.NeedsSync || !strings.Contains(m.msg, "sync 完成 2 个") {
+		t.Fatalf("after sync: %+v %s", rb.status, m.msg)
+	}
+	run(m, keyMsg("\r"))
+	if m.page != pageSettings || m.core.WorkspaceDir() != a.WorkspaceDir() {
+		t.Fatalf("enter did not open a: page %d", m.page)
+	}
+	press(t, m, "right", "tab", "down", "\r")
+	if m.page != pageList || !strings.Contains(m.msg, "gone") {
+		t.Fatalf("opened a missing workspace: page %d %s", m.page, m.msg)
+	}
+	press(t, m, "down", "\r")
+	if m.core.WorkspaceDir() != a.WorkspaceDir() || !strings.Contains(m.msg, "再按 enter") {
+		t.Fatalf("switched with unsaved changes: %s", m.msg)
+	}
+	run(m, keyMsg("\r"))
+	if m.page != pageSettings || m.core.WorkspaceDir() != b.WorkspaceDir() || len(m.changed()) != 0 {
+		t.Fatalf("second enter did not open b: page %d changed %d", m.page, len(m.changed()))
 	}
 }
