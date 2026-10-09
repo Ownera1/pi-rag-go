@@ -211,6 +211,11 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 	if err = workspace.AtomicFile(filepath.Join(storeDir, ".gitignore"), []byte("*\n"), 0600); err != nil {
 		return err
 	}
+	// The registry only lets commands name this workspace from anywhere, so
+	// failing to update it does not fail initialization.
+	if e := workspace.Register(ctx, root); e != nil {
+		fmt.Fprintf(stderr, "warning: workspace not registered (%v); run rag workspace add later\n", e)
+	}
 	checks := map[string]string{"embedding": "not checked (offline)"}
 	var problem error
 	if !*offline {

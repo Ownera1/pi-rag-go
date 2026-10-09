@@ -190,7 +190,7 @@ func uninstall(ctx context.Context, args []string, out, stderr io.Writer, h host
 	fs := flag.NewFlagSet("rag uninstall", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	agentList := fs.String("agents", "auto", "comma-separated "+agentNames+"; auto detects installed agents")
-	purge := fs.Bool("purge", false, "also delete the user-wide configuration and credentials")
+	purge := fs.Bool("purge", false, "also delete the user-wide configuration, credentials and workspace registry")
 	if err := fs.Parse(ReorderFlags(args, map[string]bool{"purge": true, "h": true, "help": true})); err != nil {
 		return err
 	}
@@ -217,7 +217,7 @@ func uninstall(ctx context.Context, args []string, out, stderr io.Writer, h host
 			return err
 		}
 		removed := []string{}
-		for _, name := range []string{"config.json", "credentials.json"} {
+		for _, name := range []string{"config.json", "credentials.json", "workspaces.json", "workspaces.lock"} {
 			path := filepath.Join(dir, name)
 			if e := os.Remove(path); e == nil {
 				removed = append(removed, path)

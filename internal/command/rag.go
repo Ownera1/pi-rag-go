@@ -11,6 +11,7 @@ import (
 
 	"github.com/Ownera1/rag-go/internal/tui"
 	"github.com/Ownera1/rag-go/internal/version"
+	"github.com/Ownera1/rag-go/internal/workspace"
 	"github.com/Ownera1/rag-go/pkg/rag"
 )
 
@@ -57,7 +58,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		args = append([]string{args[i]}, append(prefix, args[i+1:]...)...)
 	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "usage: rag install|uninstall|init|sync|query|list|outline|read|fix|status|rebuild|clean|tui|zotero|connect|mcp|eval|version [--workspace PATH] [options]")
+		fmt.Fprintln(out, "usage: rag install|uninstall|init|sync|query|list|outline|read|fix|status|rebuild|clean|tui|workspace|zotero|connect|mcp|eval|version [-w NAME|PATH] [options]")
 		fmt.Fprintln(out, "\nGet started: rag install (once), then rag init in each project.")
 		return nil
 	}
@@ -78,6 +79,9 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 	if cmd == "init" {
 		return Initialize(ctx, rest, in, out, errout)
 	}
+	if cmd == "workspace" {
+		return Workspaces(ctx, rest, out)
+	}
 	if cmd == "connect" {
 		return Connect(ctx, rest, out, errout)
 	}
@@ -90,21 +94,29 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 	if cmd == "tui" {
 		fs := flag.NewFlagSet("rag tui", flag.ContinueOnError)
 		fs.SetOutput(errout)
-		root := fs.String("workspace", "", "explicit workspace root")
+		root := workspaceFlag(fs)
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
 		if !newTerminal(in, errout).interactive {
 			return errors.New("rag tui requires an interactive terminal")
 		}
-		return tui.Run(ctx, *root)
+		dir, err := workspace.Resolve(*root)
+		if err != nil {
+			return err
+		}
+		return explainMissing(tui.Run(ctx, dir))
 	}
 	if cmd != "sync" && cmd != "query" && cmd != "status" && cmd != "rebuild" && cmd != "clean" && cmd != "list" && cmd != "outline" && cmd != "read" && cmd != "fix" {
 		return fmt.Errorf("unknown command %q; see rag --help and the v0.2 migration guide", cmd)
 	}
 	fs := flag.NewFlagSet("rag "+cmd, flag.ContinueOnError)
 	fs.SetOutput(errout)
-	root := fs.String("workspace", "", "explicit workspace root")
+	root := workspaceFlag(fs)
+	all := false
+	if cmd == "sync" || cmd == "status" || cmd == "clean" {
+		fs.BoolVar(&all, "all", false, "run on every registered workspace")
+	}
 	opts := rag.QueryOptions{}
 	read := rag.ReadOptions{}
 	fix := rag.FixOptions{}
@@ -148,7 +160,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		fs.BoolVar(&confirm, "confirm", false, "permit generation deletion")
 		fs.BoolVar(&dryRun, "dry-run", false, "force a preview")
 	}
-	if err := fs.Parse(ReorderFlags(rest, map[string]bool{"no-sync": true, "no-rerank": true, "confirm": true, "dry-run": true, "help": true, "h": true})); err != nil {
+	if err := fs.Parse(ReorderFlags(rest, map[string]bool{"no-sync": true, "no-rerank": true, "confirm": true, "dry-run": true, "all": true, "help": true, "h": true})); err != nil {
 		return err
 	}
 	if cmd == "outline" && fs.NArg() > 0 && read.Document == "" {
@@ -179,45 +191,130 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 			}
 		}
 	})
-	core, err := rag.Open(rag.Options{WorkspaceDir: *root})
+	run := func(core *rag.Core) (result any, err error) {
+		switch cmd {
+		case "sync":
+			result, err = core.Sync(ctx)
+		case "query":
+			result, err = core.Query(ctx, strings.Join(fs.Args(), " "), opts)
+		case "list":
+			result, err = core.Documents(ctx)
+		case "outline":
+			var r rag.Outline
+			if r, err = core.Outline(ctx, read.Document); err == nil {
+				result = r
+			}
+		case "read":
+			var r rag.ReadResult
+			if r, err = core.Read(ctx, read); err == nil {
+				result = r
+			}
+		case "fix":
+			var r rag.FixResult
+			if r, err = core.Fix(ctx, fix); err == nil {
+				result = r
+			}
+		case "status":
+			result, err = core.Status(ctx)
+		case "rebuild":
+			result, err = core.Rebuild(ctx)
+		case "clean":
+			result, err = core.Cleanup(ctx, keep, dryRun || !confirm)
+		}
+		return result, err
+	}
+	if all {
+		if *root != "" {
+			return errors.New("--all and --workspace are exclusive")
+		}
+		return eachWorkspace(ctx, out, errout, run)
+	}
+	dir, err := workspace.Resolve(*root)
 	if err != nil {
 		return err
 	}
-	defer core.Close()
-	var result any
-	switch cmd {
-	case "sync":
-		result, err = core.Sync(ctx)
-	case "query":
-		result, err = core.Query(ctx, strings.Join(fs.Args(), " "), opts)
-	case "list":
-		result, err = core.Documents(ctx)
-	case "outline":
-		var r rag.Outline
-		if r, err = core.Outline(ctx, read.Document); err == nil {
-			result = r
-		}
-	case "read":
-		var r rag.ReadResult
-		if r, err = core.Read(ctx, read); err == nil {
-			result = r
-		}
-	case "fix":
-		var r rag.FixResult
-		if r, err = core.Fix(ctx, fix); err == nil {
-			result = r
-		}
-	case "status":
-		result, err = core.Status(ctx)
-	case "rebuild":
-		result, err = core.Rebuild(ctx)
-	case "clean":
-		result, err = core.Cleanup(ctx, keep, dryRun || !confirm)
+	core, err := rag.Open(rag.Options{WorkspaceDir: dir})
+	if err != nil {
+		return explainMissing(err)
 	}
+	defer core.Close()
+	result, err := run(core)
 	if result != nil {
 		if e := json.NewEncoder(out).Encode(result); e != nil {
 			return e
 		}
 	}
 	return err
+}
+
+// workspaceFlag registers --workspace and its -w shorthand.
+func workspaceFlag(fs *flag.FlagSet) *string {
+	root := fs.String("workspace", "", "registered workspace name or workspace root")
+	fs.StringVar(root, "w", "", "shorthand for --workspace")
+	return root
+}
+
+// explainMissing lists the registered workspaces when none was found.
+func explainMissing(err error) error {
+	if !errors.Is(err, workspace.ErrNotFound) {
+		return err
+	}
+	list, e := workspace.Workspaces()
+	if e != nil || len(list) == 0 {
+		return err
+	}
+	names := make([]string, len(list))
+	for i, w := range list {
+		names[i] = w.Name
+	}
+	return fmt.Errorf("%w; registered workspaces: %s (select one with -w NAME)", err, strings.Join(names, ", "))
+}
+
+type workspaceResult struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Result any    `json:"result,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// eachWorkspace runs a command on every registered workspace in turn,
+// continuing past failures like git for-each-repo --keep-going.
+func eachWorkspace(ctx context.Context, out, errout io.Writer, run func(*rag.Core) (any, error)) error {
+	list, err := workspace.Workspaces()
+	if err != nil {
+		return err
+	}
+	if len(list) == 0 {
+		return errors.New("no registered workspaces; run rag init or rag workspace add")
+	}
+	results, failed := []workspaceResult{}, 0
+	for i, w := range list {
+		if ctx.Err() != nil {
+			break
+		}
+		fmt.Fprintf(errout, "[%d/%d] %s\n", i+1, len(list), w.Name)
+		r := workspaceResult{Name: w.Name, Path: w.Path}
+		err := errors.New("workspace configuration is missing; rag workspace remove it if it was deleted")
+		if !w.Missing {
+			var core *rag.Core
+			if core, err = rag.Open(rag.Options{WorkspaceDir: w.Path}); err == nil {
+				r.Result, err = run(core)
+				core.Close()
+			}
+		}
+		if err != nil {
+			r.Error, failed = err.Error(), failed+1
+		}
+		results = append(results, r)
+	}
+	if err = json.NewEncoder(out).Encode(results); err != nil {
+		return err
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d of %d workspaces failed", failed, len(list))
+	}
+	return nil
 }
