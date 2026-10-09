@@ -106,7 +106,7 @@ func serve(open resolve, readOnly bool, lifecycle ...context.Context) *mcp.Serve
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "rag_query",
-		Description: "Search this workspace; local queries synchronize changed documents unless disable_sync=true",
+		Description: "Search this workspace. Write the query in the documents' language, as rag_list_documents titles show it, translating a question asked in another; keyword search matches only the documents' own words. Local queries synchronize changed documents unless disable_sync=true",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in queryIn) (*mcp.CallToolResult, rag.QueryResult, error) {
 		core, done, err := open(in.Workspace)
