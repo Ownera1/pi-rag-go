@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -464,33 +464,44 @@ func (markerEmbedding) EmbedDocuments(_ context.Context, in []string) ([][]float
 func TestHybridFusionRewardsAgreementAcrossRetrievers(t *testing.T) {
 	c := openTest(t, t.TempDir(), markerEmbedding{})
 	defer c.Close()
-	// BM25 order: a, b. Vector order: c, b, d1, d2, a.
+	// BM25 order: a, b, e. Vector order: c, b, e, a.
 	for name, text := range map[string]string{
-		"a.txt":  "kalman filter tracking kalman filter za0",
-		"b.txt":  "kalman smoothing zb8",
-		"c.txt":  "recursive state estimation zc1",
-		"d1.txt": "orbit propagation zd5",
-		"d2.txt": "orbit maneuver zd5",
+		"a.txt": "kalman filter tracking kalman filter za0",
+		"b.txt": "kalman filter smoothing zb8",
+		"c.txt": "recursive state estimation zc1",
+		"e.txt": "kalman orbit propagation zd5",
 	} {
 		sourceFile(t, docPath(c, name), []byte(text))
 	}
-	top := func(alpha float64) Hit {
+	query := func(alpha float64) []string {
 		t.Helper()
 		q, err := c.Query(context.Background(), "kalman filter", QueryOptions{Alpha: &alpha})
-		if err != nil || q.Method != "hybrid" || len(q.Hits) == 0 {
+		if err != nil || q.Method != "hybrid" || len(q.Hits) != 4 {
 			t.Fatalf("alpha %v: %+v %v", alpha, q, err)
 		}
-		return q.Hits[0]
+		if h := q.Hits[0]; h.BM25 < 0 || h.Vector < 0 {
+			t.Fatalf("raw scores: %+v", h)
+		}
+		out := []string{}
+		for _, h := range q.Hits {
+			out = append(out, filepath.Base(h.Chunk.Path))
+		}
+		return out
 	}
-	// b ranks second in both lists and beats each single-list winner.
-	if h := top(0.5); filepath.Base(h.Chunk.Path) != "b.txt" || h.BM25 <= 0 || math.Abs(h.Vector-0.8) > 1e-3 {
-		t.Fatalf("agreement: %+v", h)
+	// b scores well in both lists and beats each single-list winner.
+	if order := query(0.5); order[0] != "b.txt" {
+		t.Fatalf("agreement: %v", order)
 	}
-	if h := top(1); filepath.Base(h.Chunk.Path) != "a.txt" {
-		t.Fatalf("BM25 weight: %+v", h)
+	// e is weak in both lists. Reciprocal rank fusion ranked it, like any
+	// passage both lists hold, above the vector winner c.
+	if order := query(0.3); slices.Index(order, "c.txt") > slices.Index(order, "e.txt") {
+		t.Fatalf("weak agreement outranked the vector winner: %v", order)
 	}
-	if h := top(0); filepath.Base(h.Chunk.Path) != "c.txt" {
-		t.Fatalf("vector weight: %+v", h)
+	if order := query(1); order[0] != "a.txt" {
+		t.Fatalf("BM25 weight: %v", order)
+	}
+	if order := query(0); order[0] != "c.txt" {
+		t.Fatalf("vector weight: %v", order)
 	}
 }
 

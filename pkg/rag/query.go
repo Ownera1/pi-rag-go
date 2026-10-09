@@ -29,11 +29,6 @@ func quotedQuery(query string) string {
 	return strings.Join(out, " OR ")
 }
 
-// rrfK damps the head of each ranking in reciprocal rank fusion; 60 is the
-// customary constant from Cormack et al. (2009).
-const rrfK = 60
-
-// ranks orders candidates by relevance (higher first) and returns 1-based ranks.
 func words(s string) []string {
 	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 }
@@ -54,20 +49,22 @@ func pathHas(root, path, term string) bool {
 	return false
 }
 
-func ranks(relevance map[int64]float64) map[int64]int {
-	ids := make([]int64, 0, len(relevance))
-	for id := range relevance {
-		ids = append(ids, id)
+// minMax rescales one retriever's scores to [0,1] over its own results, so
+// a weighted sum compares how strongly each retriever prefers a passage.
+// Reciprocal rank fusion credited ranks alone: BM25, which matches any query
+// term, ranks noise as highly as the vector head, and on real papers the fused
+// ranking fell below vector search alone (Bruch et al., 2023, compare both).
+func minMax(scores map[int64]float64) map[int64]float64 {
+	lo, hi := math.Inf(1), math.Inf(-1)
+	for _, v := range scores {
+		lo, hi = min(lo, v), max(hi, v)
 	}
-	sort.Slice(ids, func(i, j int) bool {
-		if relevance[ids[i]] != relevance[ids[j]] {
-			return relevance[ids[i]] > relevance[ids[j]]
+	out := make(map[int64]float64, len(scores))
+	for id, v := range scores {
+		out[id] = 1
+		if hi > lo {
+			out[id] = (v - lo) / (hi - lo)
 		}
-		return ids[i] < ids[j]
-	})
-	out := make(map[int64]int, len(ids))
-	for i, id := range ids {
-		out[id] = i + 1
 	}
 	return out
 }
@@ -207,8 +204,7 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 			break
 		}
 	}
-	// Each retriever contributes by rank, not raw score, so BM25 and cosine
-	// scales never need to be reconciled. Hits keep the raw relevance values.
+	// Hits keep the raw relevance values; only the fused score is normalized.
 	bm := map[int64]float64{}
 	for _, x := range fts {
 		ch, ok := chunks[x.RowID]
@@ -225,7 +221,7 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 	for _, x := range vec {
 		cosine[x.RowID] = 1 - x.Score*x.Score/2 // L2 distance of unit vectors.
 	}
-	bmRank, vecRank := ranks(bm), ranks(cosine)
+	normBM, normVec := minMax(bm), minMax(cosine)
 	bmWeight, vecWeight := alpha, 1-alpha
 	if len(vec) == 0 {
 		bmWeight = 1
@@ -238,17 +234,8 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 		if !ok {
 			continue
 		}
-		b, v := bm[id], cosine[id]
-		score := 0.0
-		if r, ok := bmRank[id]; ok {
-			score += bmWeight / float64(rrfK+r)
-		}
-		if r, ok := vecRank[id]; ok {
-			score += vecWeight / float64(rrfK+r)
-		}
-		if score > 0 {
-			hits = append(hits, model.Hit{Chunk: ch, BM25: b, Vector: v, Hybrid: score})
-		}
+		score := bmWeight*normBM[id] + vecWeight*normVec[id]
+		hits = append(hits, model.Hit{Chunk: ch, BM25: bm[id], Vector: cosine[id], Hybrid: score})
 	}
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Hybrid > hits[j].Hybrid })
 	if len(hits) > recall {
