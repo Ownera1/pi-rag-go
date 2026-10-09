@@ -609,3 +609,52 @@ func TestRequiredRerankFailureIsAnError(t *testing.T) {
 		t.Fatalf("optional rerank: %+v %v", r, err)
 	}
 }
+
+type recordingReranker struct{ texts *[]string }
+
+func (recordingReranker) Model() string { return "fake" }
+func (r recordingReranker) Rerank(_ context.Context, _ string, docs []model.RerankDoc, _ int) ([]model.RerankResult, error) {
+	out := []model.RerankResult{}
+	for _, d := range docs {
+		*r.texts = append(*r.texts, d.Text)
+		out = append(out, model.RerankResult{ID: d.ID, Score: 1})
+	}
+	return out, nil
+}
+
+func TestRerankSeesTitleAndSection(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	c := openTest(t, root, fakeEmbedding{})
+	if err := os.WriteFile(docPath(c, "a.md"), []byte("# Paper\n\n## Complexity Analysis\n\nstable evidence\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A section under the document's own title, as in MinerU papers.
+	if err := os.WriteFile(docPath(c, "b.md"), []byte("# b.md\n\n## Setup\n\nstable evidence too\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := c.Sync(ctx); err != nil || r.Failed > 0 {
+		t.Fatalf("sync: %+v %v", r, err)
+	}
+	c.Close()
+	texts := []string{}
+	c, err := Open(Options{WorkspaceDir: root, Embedder: fakeEmbedding{}, Reranker: recordingReranker{&texts}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err = c.Query(ctx, "evidence", QueryOptions{RequireRerank: true}); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"a.md > Paper / Complexity Analysis\n\n": false, "b.md / Setup\n\n": false}
+	for _, text := range texts {
+		for prefix := range want {
+			want[prefix] = want[prefix] || strings.HasPrefix(text, prefix)
+		}
+	}
+	for prefix, seen := range want {
+		if !seen {
+			t.Fatalf("no reranker text starts with %q: %q", prefix, texts)
+		}
+	}
+}
