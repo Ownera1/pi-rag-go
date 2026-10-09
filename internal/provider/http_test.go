@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Ownera1/rag-go/internal/model"
 )
@@ -101,6 +102,45 @@ func TestConfiguredEmbeddingBatchSize(t *testing.T) {
 	for _, size := range []int{0, 257} {
 		if _, err = NewHTTP(cfg, 3000, 0, size); err == nil {
 			t.Fatalf("accepted batch %d", size)
+		}
+	}
+}
+
+func TestRetryHonorsRetryAfter(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(429)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"index":0,"embedding":[1,0]}]}`))
+	}))
+	defer server.Close()
+	p, err := NewHTTP(model.ProviderConfig{Type: "openai", Model: "fake", Dimensions: 2, BaseURL: server.URL}, 3000, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	// Without the header the first retry waits at least 500ms.
+	if _, err = p.EmbedQuery(context.Background(), "q"); err != nil || calls != 2 || time.Since(started) > 400*time.Millisecond {
+		t.Fatalf("calls %d after %v: %v", calls, time.Since(started), err)
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for v, want := range map[string]time.Duration{
+		" 3 ":                           3 * time.Second,
+		"-2":                            0,
+		"3600":                          time.Minute,
+		"Thu, 01 Jan 2026 00:00:10 GMT": 10 * time.Second,
+	} {
+		if d, ok := retryAfter(v, now); !ok || d != want {
+			t.Errorf("%q: %v %v", v, d, ok)
+		}
+	}
+	for _, v := range []string{"", "soon"} {
+		if _, ok := retryAfter(v, now); ok {
+			t.Errorf("accepted %q", v)
 		}
 	}
 }
