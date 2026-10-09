@@ -109,12 +109,8 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 	if c.db == nil {
 		return out, nil
 	}
-	stats, err := c.db.Stats(ctx)
-	if err != nil {
+	if ok, err := c.db.HasChunks(ctx); err != nil || !ok {
 		return out, err
-	}
-	if stats.Chunks == 0 {
-		return out, nil
 	}
 	if opts.Document != "" {
 		d, err := c.resolveDocument(ctx, opts.Document)
@@ -146,15 +142,15 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 	}
 	fts := []store.Match{}
 	if mode != "vector" {
-		fts, err = c.db.FTS(ctx, quotedQuery(query), 200, filtered)
-		if err != nil {
-			return out, err
-		}
+		// The Han index also holds the original text, so it serves Latin
+		// terms of a mixed query too.
 		if hanQuery, hasHan := searchtext.Query(query); hasHan {
 			fts, err = c.db.FTSHan(ctx, hanQuery, 200, filtered)
-			if err != nil {
-				return out, err
-			}
+		} else {
+			fts, err = c.db.FTS(ctx, quotedQuery(query), 200, filtered)
+		}
+		if err != nil {
+			return out, err
 		}
 	}
 	var e error

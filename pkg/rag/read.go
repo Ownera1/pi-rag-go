@@ -380,17 +380,17 @@ func (s *session) documentInfos(ctx context.Context) ([]documentEntry, error) {
 	if err != nil {
 		return nil, err
 	}
+	titles := map[string]string{}
+	if cat != nil {
+		if titles, err = cat.Titles(ctx); err != nil {
+			return nil, err
+		}
+	}
 	out := make([]documentEntry, len(docs))
 	for i, d := range docs {
 		title := d.Title
-		if cat != nil {
-			m, err := cat.Metadata(ctx, d.Key)
-			if err != nil {
-				return nil, err
-			}
-			if m != nil && m.Title != "" {
-				title = m.Title
-			}
+		if t := titles[d.Key]; t != "" {
+			title = t
 		}
 		rel, err := filepath.Rel(s.docs, d.Path)
 		if err != nil {
