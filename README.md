@@ -155,6 +155,6 @@ rag eval --dataset evaluation/sample/questions.jsonl --modes bm25,vector,hybrid 
   --output evaluation/runs/sample.json
 ```
 
-Evaluation calls Core directly, requires a synchronized compatible index and never auto-syncs during the run. Reports retain Recall@K, MRR, p50/p95 latency, failures, degradation, usage and optional cost estimates. The sample is synthetic; see [evaluation guidance](evaluation/README.md).
+Evaluation calls Core directly, requires a synchronized compatible index and never auto-syncs during the run. Reports retain Recall@K, MRR, p50/p95 latency, failures, degradation, usage and optional cost estimates, plus an `environment` naming the build (`rag version`; a plain `go build` reports its Git commit, `-dirty` with uncommitted changes), the workspace configuration, the active index, each document's version and the dataset's SHA-256, so a score change between two reports can be traced to its cause. The sample is synthetic; see [evaluation guidance](evaluation/README.md).
 
 `pkg/rag` exposes `Open(Options{WorkspaceDir, ReadOnly, Embedder, Reranker})`, `Core.Sync`, `Query`, `Documents`, `Read`, `Outline`, `Status`, `ListDocuments`, `Rebuild`, `Cleanup`, `SyncZotero`, `MatchZotero`, `LinkZotero`, `ZoteroStatus`, `ZoteroLinks`, `Close`, and `DefaultConfig`. Methods accept `context.Context`; injected providers must support concurrent calls. Core contains no MCP or external document-extraction dependency.

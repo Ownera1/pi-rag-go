@@ -68,14 +68,27 @@ type Summary struct {
 	Results          []CaseResult   `json:"results"`
 }
 
+// Environment identifies what produced a report, so a score change between
+// two reports can be traced to the binary, configuration, documents or labels.
+type Environment struct {
+	Version  string     `json:"version"`
+	Config   rag.Config `json:"config"`
+	ActiveDB string     `json:"activeDb"`
+	// Documents maps each document id to its version, which changes whenever
+	// the document's indexed content does.
+	Documents     map[string]string `json:"documents"`
+	DatasetSHA256 string            `json:"datasetSha256"`
+}
+
 type Report struct {
-	CreatedAt    string    `json:"createdAt"`
-	Dataset      string    `json:"dataset"`
-	Provenance   []string  `json:"provenance"`
-	TopK         int       `json:"topK"`
-	MetricPolicy string    `json:"metricPolicy"`
-	CostPolicy   string    `json:"costPolicy"`
-	Summaries    []Summary `json:"summaries"`
+	CreatedAt    string       `json:"createdAt"`
+	Dataset      string       `json:"dataset"`
+	Environment  *Environment `json:"environment,omitempty"`
+	Provenance   []string     `json:"provenance"`
+	TopK         int          `json:"topK"`
+	MetricPolicy string       `json:"metricPolicy"`
+	CostPolicy   string       `json:"costPolicy"`
+	Summaries    []Summary    `json:"summaries"`
 }
 
 func ReadCases(r io.Reader) ([]Case, error) {
