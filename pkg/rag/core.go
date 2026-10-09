@@ -80,6 +80,8 @@ type session struct {
 	progress     func(IndexProgress)
 	readOnly     bool
 	release      func()
+	// refusal is why the configured embedding endpoint may not receive text.
+	refusal error
 }
 
 func DefaultConfig() Config { return model.DefaultConfig() }
@@ -168,6 +170,8 @@ func (c *Core) operation(ctx context.Context, write bool) (*session, error) {
 			return fail(e)
 		}
 		p.SetCredential(key)
+		s.refusal = workspace.CheckEndpoint(s.workspace, s.cfg.Embedding)
+		p.Refuse(s.refusal)
 		s.embedder = p
 	}
 	if s.reranker == nil && s.cfg.Reranker.Type != "none" {
@@ -180,6 +184,7 @@ func (c *Core) operation(ctx context.Context, write bool) (*session, error) {
 			return fail(e)
 		}
 		p.SetCredential(key)
+		p.Refuse(workspace.CheckEndpoint(s.workspace, s.cfg.Reranker))
 		s.reranker = p
 	}
 	return s, nil
@@ -304,6 +309,11 @@ func (c *Core) sync(ctx context.Context, automatic bool) (IndexResult, error) {
 		return IndexResult{}, err
 	}
 	defer s.close()
+	// Refuse before recording an attempt, so trusting the workspace takes
+	// effect without the automatic retry cooldown.
+	if s.refusal != nil {
+		return IndexResult{}, s.refusal
+	}
 	if err = s.compatible(ctx, s.db); err != nil {
 		return IndexResult{}, err
 	}
@@ -511,5 +521,8 @@ func (c *Core) Rebuild(ctx context.Context) (IndexResult, error) {
 		return IndexResult{}, err
 	}
 	defer s.close()
+	if s.refusal != nil {
+		return IndexResult{}, s.refusal
+	}
 	return s.rebuild(ctx)
 }

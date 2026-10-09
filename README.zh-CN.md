@@ -32,7 +32,7 @@ rag install --embedding-type openai --model YOUR_MODEL --dimensions YOUR_DIMENSI
 rag init ~/Projects/my-project --docs /absolute/converted-papers
 ```
 
-未执行 `rag install` 时，`rag init` 会询问文档目录、embedding 服务、模型及 API key（不回显），并把 key 保存在工作区；它接受与 `rag install` 相同的服务参数。凭据依次从环境变量、工作区、全局文件读取。环境变量和全局文件只发给 Voyage 默认地址或 `rag install` 记录的地址，克隆仓库中的工作区配置无法把它们转发到别处；其他地址只使用 `rag init` 保存在该工作区的 key。`--no-sync` 跳过初始索引；`--offline` 跳过在线 embedding 探测和初始索引。重复初始化保留已有设置，只更新显式指定的选项；配置损坏时会报错。修改文档根目录、embedding 或分块配置后，需要执行 `rag rebuild`。
+未执行 `rag install` 时，`rag init` 会询问文档目录、embedding 服务、模型及 API key（不回显），并把 key 保存在工作区；它接受与 `rag install` 相同的服务参数。凭据依次从环境变量、工作区、全局文件读取。环境变量和全局文件只发给 Voyage 默认地址或 `rag install` 记录的地址，克隆仓库中的工作区配置无法把它们转发到别处；其他地址只使用 `rag init` 保存在该工作区的 key。这类配置也不能把文档和查询发往自己指定的地址：其他地址只接收在本机由 `rag init` 或 `rag workspace add` 登记过的工作区的内容，未登记的工作区在同步、重建和查询时会拒绝发送，并提示要运行的命令。`--no-sync` 跳过初始索引；`--offline` 跳过在线 embedding 探测和初始索引。重复初始化保留已有设置，只更新显式指定的选项；配置损坏时会报错。修改文档根目录、embedding 或分块配置后，需要执行 `rag rebuild`。
 
 ## 工作区与同步
 
@@ -52,7 +52,7 @@ my-project/
 
 命令从当前目录向上查找最近的 `.rag-go/config.json`。`--workspace PATH`（或 `-w`）精确选择指定工作区；嵌套工作区相互独立。
 
-`rag init` 还会把工作区登记到 `~/.config/rag-go/workspaces.json`，之后在任何目录都能按名字指定它：`rag sync -w papers`。名字取目录名，两个工作区同名时加上上级目录（`lab1/papers`）；`rag workspace list` 列出名字，配置已不存在的工作区标为 `missing`。登记的名字优先于相对路径，要指目录请写 `./papers`。`rag sync --all`、`rag status --all` 和 `rag clean --all` 依次处理所有登记的工作区，遇到失败继续，最后只要有失败就返回非零；rebuild 不提供 `--all`，因为它会重新嵌入全部文档。在工作区之外运行时，报错会列出已登记的名字。`rag workspace add [PATH]` 登记已有工作区（默认当前工作区），`rag workspace remove NAME|PATH` 只删除登记、不动工作区。登记表只记录路径，数据、配置和凭据仍在各自的工作区里；`rag uninstall --purge` 会一并删除登记表。`.rag-go` 内置的忽略文件将配置、凭据和索引排除在 Git 之外，文档源文件由用户自行管理。
+`rag init` 还会把工作区登记到 `~/.config/rag-go/workspaces.json`，之后在任何目录都能按名字指定它：`rag sync -w papers`。名字取目录名，两个工作区同名时加上上级目录（`lab1/papers`）；`rag workspace list` 列出名字，配置已不存在的工作区标为 `missing`。登记的名字优先于相对路径，要指目录请写 `./papers`。`rag sync --all`、`rag status --all` 和 `rag clean --all` 依次处理所有登记的工作区，遇到失败继续，最后只要有失败就返回非零；rebuild 不提供 `--all`，因为它会重新嵌入全部文档。在工作区之外运行时，报错会列出已登记的名字。`rag workspace add [PATH]` 登记已有工作区（默认当前工作区），`rag workspace remove NAME|PATH` 只删除登记、不动工作区。登记表只记录路径，数据、配置和凭据仍在各自的工作区里；登记同时意味着信任该工作区配置的地址（见上文）；`rag uninstall --purge` 会一并删除登记表。`.rag-go` 内置的忽略文件将配置、凭据和索引排除在 Git 之外，文档源文件由用户自行管理。
 
 常用操作：
 
