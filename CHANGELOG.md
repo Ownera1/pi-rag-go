@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.6.7 (2026-10-09)
+
+No rebuild needed: v0.6.x indexes stay compatible. Evaluation and provider retries only.
 
 - `rag eval` without `--modes` also evaluates `rerank` when the workspace configures a reranker, after the `bm25`, `vector` and `hybrid` baselines. The default used to stop at the baselines, so the mode a configured workspace actually queries with went unmeasured unless named; `scripts/ab-eval.sh` named only the baselines, and every A/B report it wrote lacked rerank. The script now follows the default. On the real six-paper workspace (voyage `rerank-3`), the 6 structure questions gave `bm25,vector,hybrid` on v0.6.6 and `bm25,vector,hybrid,rerank` on this build, with the same baseline scores; a workspace without a reranker evaluates the three baselines as before.
 - `rag eval` reports record what produced them under `environment`: the build, the workspace configuration, the active index, each document's version and the dataset's SHA-256. A plain `go build`, as `scripts/ab-eval.sh` makes, now reports its Git commit (with `-dirty` for uncommitted changes) in `rag version` and the report instead of `dev (unknown)`. Before, a report kept only the dataset path, top K and scores: rerunning the real six-paper set of 39 questions gave hybrid Recall@5 0.72 against 0.90 in a report from three days earlier, every label still matched the current index, and nothing recorded which build, embedding model or index produced the older score. The same run with this build records `dev (5550a7f-dirty)`, `voyage-4` with reranker `rerank-3`, the active index generation and the six document versions.
