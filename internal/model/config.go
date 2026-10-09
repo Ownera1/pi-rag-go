@@ -23,7 +23,7 @@ func DefaultConfig() Config {
 		Indexing:        IndexingConfig{Workers: 32, SemanticWorkers: 2, EmbeddingWorkers: 4, EmbeddingBatchSize: 64},
 		Documents:       "documents",
 		ExcludePatterns: []string{},
-		Alpha:           0.4,
+		Alpha:           0.3,
 		CandidateTopK:   30,
 		TopK:            5,
 		HTTPTimeoutMs:   30000,
