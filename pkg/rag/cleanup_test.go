@@ -75,6 +75,12 @@ func TestCleanupPreviewRetainsActiveAndUnknownFiles(t *testing.T) {
 	}
 	// A generation of another fingerprint leaves its directory empty.
 	stale := fakeGeneration(t, filepath.Join(dir, ".rag-go", "indexes", "1111111111-1111111111", "1-0000000000000002"))
+	// Finder metadata keeps neither a generation nor its directory.
+	for _, path := range []string{stale, filepath.Dir(stale)} {
+		if err = os.WriteFile(filepath.Join(path, ".DS_Store"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	s, err := c.Status(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -112,6 +118,11 @@ func TestCleanupPreviewRetainsActiveAndUnknownFiles(t *testing.T) {
 	removed, err := c.Cleanup(ctx, 1, false)
 	if err != nil || len(removed.Removed) != 4 {
 		t.Fatalf("cleanup: %+v %v", removed, err)
+	}
+	for _, path := range removed.Skipped {
+		if filepath.Base(path) == ".DS_Store" {
+			t.Fatalf("reported Finder metadata: %s", path)
+		}
 	}
 	for _, path := range removed.Removed {
 		if _, err = os.Stat(path); !os.IsNotExist(err) {
