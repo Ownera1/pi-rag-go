@@ -78,7 +78,7 @@ func TestRerankReportsCandidateRecall(t *testing.T) {
 
 func TestDatasetRejectsAmbiguousInput(t *testing.T) {
 	valid := `{"id":"1","query":"q","relevant":[{"contains":"evidence"}]}`
-	for _, input := range []string{"", valid + "\n" + valid, valid + `{}`, `{"id":"1","query":"q","relevant":[{}]}`, `{"id":"1","query":"q","relevant":[{"contains":"x"}],"extra":true}`} {
+	for _, input := range []string{"", valid + "\n" + valid, valid + `{}`, `{"id":"1","query":"q","relevant":[{}]}`, `{"id":"1","query":"q","relevant":[{"pathSuffix":"p","anyOf":[{"contains":"x"},{}]}]}`, `{"id":"1","query":"q","relevant":[{"contains":"x"}],"extra":true}`} {
 		if _, err := ReadCases(strings.NewReader(input)); err == nil {
 			t.Fatalf("accepted invalid dataset: %s", input)
 		}
@@ -109,6 +109,9 @@ func TestRerankModeAndValidation(t *testing.T) {
 	hit := rag.Hit{Chunk: model.Chunk{Path: "/tmp/notpaper.txt", Content: "x"}}
 	if matches(hit, Relevant{PathSuffix: "paper.txt"}) {
 		t.Fatal("path suffix matched part of filename")
+	}
+	if !matches(hit, Relevant{PathSuffix: "notpaper.txt", AnyOf: []Relevant{{Contains: "y"}, {Contains: "x"}}}) || matches(hit, Relevant{PathSuffix: "paper.txt", AnyOf: []Relevant{{Contains: "x"}}}) || matches(hit, Relevant{AnyOf: []Relevant{{Contains: "y"}}}) {
+		t.Fatal("anyOf should need the label's selectors and one alternative")
 	}
 	if percentile([]float64{4, 1, 3, 2}, .5) != 2 || percentile([]float64{4, 1, 3, 2}, .95) != 4 {
 		t.Fatal("incorrect percentile")

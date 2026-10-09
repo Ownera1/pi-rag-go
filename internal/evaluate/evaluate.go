@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -17,10 +18,22 @@ import (
 	"github.com/Ownera1/rag-go/pkg/rag"
 )
 
+// Relevant is one passage a question needs: a hit matches when every given
+// selector does and, if AnyOf lists alternatives, at least one of them does,
+// for an answer stated in more than one passage.
 type Relevant struct {
-	PathSuffix string `json:"pathSuffix,omitempty"`
-	Contains   string `json:"contains,omitempty"`
-	Section    string `json:"section,omitempty"`
+	PathSuffix string     `json:"pathSuffix,omitempty"`
+	Contains   string     `json:"contains,omitempty"`
+	Section    string     `json:"section,omitempty"`
+	AnyOf      []Relevant `json:"anyOf,omitempty"`
+}
+
+// empty reports a label that would match every hit.
+func empty(gold Relevant) bool {
+	if len(gold.AnyOf) > 0 {
+		return slices.ContainsFunc(gold.AnyOf, empty)
+	}
+	return gold.PathSuffix == "" && gold.Contains == "" && gold.Section == ""
 }
 
 type Case struct {
@@ -119,10 +132,8 @@ func ReadCases(r io.Reader) ([]Case, error) {
 		if strings.TrimSpace(c.ID) == "" || strings.TrimSpace(c.Query) == "" || len(c.Relevant) == 0 || seen[c.ID] {
 			return nil, fmt.Errorf("dataset line %d: require unique id, query and relevance labels", line)
 		}
-		for _, gold := range c.Relevant {
-			if gold.PathSuffix == "" && gold.Contains == "" && gold.Section == "" {
-				return nil, fmt.Errorf("dataset line %d: empty relevance label", line)
-			}
+		if slices.ContainsFunc(c.Relevant, empty) {
+			return nil, fmt.Errorf("dataset line %d: empty relevance label", line)
 		}
 		if c.Provenance == "" {
 			c.Provenance = "unspecified"
@@ -152,7 +163,7 @@ func matches(hit rag.Hit, gold Relevant) bool {
 	if gold.Section != "" && (hit.Chunk.Section == nil || *hit.Chunk.Section != gold.Section) {
 		return false
 	}
-	return true
+	return len(gold.AnyOf) == 0 || slices.ContainsFunc(gold.AnyOf, func(alt Relevant) bool { return matches(hit, alt) })
 }
 
 func score(hits []rag.Hit, golds []Relevant, k int) (float64, float64) {
