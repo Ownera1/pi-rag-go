@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `rag tui` started outside a workspace can reach Settings: `tab` (or `2`) opens the workspace selected in the list instead of only printing a hint, and `1`/`2` pick a tab directly for terminals that keep Tab for themselves. The key help names the target (`tab 设置` on the list, `tab 列表` in Settings). The cursor is a plain bar of background color; terminals that raise text contrast drew the `>` it used to carry as a visible glyph. With colors off (`NO_COLOR`), the cursor is still a `>`.
+
 ## v0.6.4 (2026-10-09)
 
 No rebuild needed: v0.6.x indexes stay compatible. Workspaces created before this release are not listed until `rag workspace add PATH` (or `rag init` again) registers them once.

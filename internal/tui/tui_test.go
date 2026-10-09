@@ -287,6 +287,14 @@ func TestListSyncsAllAndOpensWorkspaces(t *testing.T) {
 	if m.page != pageList || m.rows[b.WorkspaceDir()].status == nil || !m.rows[b.WorkspaceDir()].status.NeedsSync {
 		t.Fatalf("list not loaded: page %d rows %+v", m.page, m.rows)
 	}
+	press(t, m, "tab")
+	if m.page != pageSettings || m.core == nil || m.core.WorkspaceDir() != a.WorkspaceDir() {
+		t.Fatalf("tab without an open workspace did not open the selected one: page %d", m.page)
+	}
+	press(t, m, "1")
+	if m.page != pageList {
+		t.Fatalf("1 did not return to the list: page %d", m.page)
+	}
 	run(m, keyMsg("S"))
 	ra, rb, rg := m.rows[a.WorkspaceDir()], m.rows[b.WorkspaceDir()], m.rows[gone]
 	if ra.state != "done" || ra.failed != nil || rb.state != "done" || rb.result.Indexed != 1 || rg.state != "skipped" || m.task != "" {

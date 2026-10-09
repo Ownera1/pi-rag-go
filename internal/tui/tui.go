@@ -21,6 +21,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 const cleanKeep = 3
@@ -28,17 +29,15 @@ const cleanKeep = 3
 // Colors are the terminal's 16 ANSI colors, so they follow its light or dark
 // theme.
 var (
-	accent = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
-	muted  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	warn   = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	bad    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	good   = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	info   = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
-	bold   = lipgloss.NewStyle().Bold(true)
-	tags   = [...]lipgloss.Style{good, info, info, warn}
-	// The cursor bar draws its ">" in its own background color: a solid bar
-	// in color, still a visible ">" where colors are off.
-	cursorBar = lipgloss.NewStyle().Background(lipgloss.Color("5")).Foreground(lipgloss.Color("5"))
+	accent    = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
+	muted     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	warn      = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	bad       = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	good      = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	info      = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
+	bold      = lipgloss.NewStyle().Bold(true)
+	tags      = [...]lipgloss.Style{good, info, info, warn}
+	cursorBar = lipgloss.NewStyle().Background(lipgloss.Color("5"))
 	// Text on a colored background is black on dark terminals and white on
 	// light ones, where the ANSI colors are darker.
 	onColor   = lipgloss.AdaptiveColor{Light: "15", Dark: "0"}
@@ -50,12 +49,16 @@ const (
 	pageSettings
 )
 
-// mark is the three-column gutter that carries the cursor bar.
+// mark is the three-column gutter that carries the cursor: a solid bar of
+// background color, or ">" where colors are off.
 func mark(selected bool) string {
-	if selected {
-		return " " + cursorBar.Render(">") + " "
+	switch {
+	case !selected:
+		return "   "
+	case lipgloss.ColorProfile() == termenv.Ascii:
+		return " > "
 	}
-	return "   "
+	return " " + cursorBar.Render(" ") + " "
 }
 
 // badge renders a short status label on a colored background.
@@ -353,12 +356,15 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if k.String() == "tab" {
-		if m.core == nil {
-			m.msg = muted.Render("先在列表里选择一个 workspace，enter 打开")
-			return m, nil
+	// tab switches pages, 1 and 2 pick one. Settings without an open
+	// workspace opens the one selected in the list.
+	if page, ok := map[string]int{"tab": 1 - m.page, "1": pageList, "2": pageSettings}[k.String()]; ok {
+		m.confirm = ""
+		if page == pageSettings && m.core == nil {
+			m.page = pageList
+			return m, m.listKey("enter", "")
 		}
-		m.page, m.confirm = 1-m.page, ""
+		m.page = page
 		return m, nil
 	}
 	if m.task != "" {
@@ -740,13 +746,13 @@ func (m *Model) footerLines(w int) (lines, help []string) {
 	}
 	switch {
 	case m.task != "":
-		help = keys(w, "", "esc", "取消", "tab", "页签", "ctrl+c", "退出")
+		help = keys(w, "", "esc", "取消", "tab", "切换页签", "ctrl+c", "退出")
 	case m.page == pageList:
-		help = keys(w, "", "上下", "选择", "enter", "打开", "s", "sync", "S", "全部 sync", "r", "刷新", "tab", "页签", "q", "退出")
+		help = keys(w, "", "上下", "选择", "enter", "打开", "s", "sync", "S", "全部 sync", "r", "刷新", "tab", "设置", "q", "退出")
 	case m.fullHelp:
-		help = keys(w, "", "上下或 j/k", "选择", "左右或 h/l", "调整", "enter", "输入", "u", "还原此项", "ctrl+s", "保存", "esc", "放弃/取消", "s", "sync", "R", "rebuild", "c", "clean", "r", "刷新", "tab", "页签", "?", "收起", "q", "退出")
+		help = keys(w, "", "上下或 j/k", "选择", "左右或 h/l", "调整", "enter", "输入", "u", "还原此项", "ctrl+s", "保存", "esc", "放弃/取消", "s", "sync", "R", "rebuild", "c", "clean", "r", "刷新", "tab 或 1/2", "切换页签", "?", "收起", "q", "退出")
 	default:
-		help = keys(w, "", "上下", "选择", "左右", "调整", "enter", "输入", "ctrl+s", "保存", "s", "sync", "R", "rebuild", "tab", "页签", "?", "全部", "q", "退出")
+		help = keys(w, "", "上下", "选择", "左右", "调整", "enter", "输入", "ctrl+s", "保存", "s", "sync", "R", "rebuild", "tab", "列表", "?", "全部", "q", "退出")
 	}
 	return lines, help
 }
