@@ -26,23 +26,29 @@ import (
 
 const cleanKeep = 3
 
-// Colors are the terminal's 16 ANSI colors, so they follow its light or dark
-// theme.
+// Status colors are the terminal's 16 ANSI colors, so they follow its theme.
+// The accent is a fixed muted blue instead: themes map ANSI magenta to
+// anything up to crimson.
 var (
-	accent    = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
-	muted     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	warn      = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	bad       = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	good      = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	info      = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
-	bold      = lipgloss.NewStyle().Bold(true)
-	tags      = [...]lipgloss.Style{good, info, info, warn}
-	cursorBar = lipgloss.NewStyle().Background(lipgloss.Color("5"))
+	accentColor = lipgloss.AdaptiveColor{Light: "#5E81AC", Dark: "#81A1C1"}
+	accent      = lipgloss.NewStyle().Foreground(accentColor)
+	muted       = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	warn        = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	bad         = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	good        = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	info        = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
+	bold        = lipgloss.NewStyle().Bold(true)
+	tags        = [...]lipgloss.Style{good, info, info, warn}
+	cursorBar   = lipgloss.NewStyle().Background(accentColor)
 	// Text on a colored background is black on dark terminals and white on
 	// light ones, where the ANSI colors are darker.
 	onColor   = lipgloss.AdaptiveColor{Light: "15", Dark: "0"}
-	activeTab = lipgloss.NewStyle().Background(lipgloss.Color("5")).Foreground(onColor)
+	activeTab = lipgloss.NewStyle().Background(accentColor).Foreground(onColor)
 )
+
+// maxWidth caps the layout so wide terminals do not push badges and tags
+// far from what they describe.
+const maxWidth = 100
 
 const (
 	pageList = iota
@@ -140,13 +146,13 @@ func Run(ctx context.Context, dir string) error {
 	if err != nil {
 		return err
 	}
+	// Query the background once now: asked mid-render, the terminal's reply
+	// would race the program's input reader.
+	lipgloss.HasDarkBackground()
 	m, err := New(ctx, core, open)
 	if err != nil {
 		return err
 	}
-	// Query the background once now: asked mid-render, the terminal's reply
-	// would race the program's input reader.
-	lipgloss.HasDarkBackground()
 	defer func() {
 		if m.core != nil {
 			m.core.Close()
@@ -163,8 +169,12 @@ func Run(ctx context.Context, dir string) error {
 // New starts on the settings page of core, or on the workspace list when core
 // is nil. open opens a listed workspace.
 func New(ctx context.Context, core *rag.Core, open func(string) (*rag.Core, error)) (*Model, error) {
+	fill := accentColor.Dark
+	if !lipgloss.HasDarkBackground() {
+		fill = accentColor.Light
+	}
 	m := &Model{ctx: ctx, open: open, fields: fields(), page: pageList,
-		input: textinput.New(), bar: progress.New(progress.WithSolidFill("5"), progress.WithFillCharacters('=', '-'), progress.WithWidth(30))}
+		input: textinput.New(), bar: progress.New(progress.WithSolidFill(fill), progress.WithFillCharacters('=', '-'), progress.WithWidth(30))}
 	if core != nil {
 		if err := m.setCore(core); err != nil {
 			return nil, err
@@ -280,9 +290,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		_, valueW := columns(m.width)
+		w := min(m.width, maxWidth)
+		_, valueW := columns(w)
 		m.input.Width = max(1, valueW-lipgloss.Width(m.input.Prompt)-1)
-		m.bar.Width = max(10, min(50, m.width-9))
+		m.bar.Width = max(10, min(50, w-9))
 		// Terminals reflow or scroll their own content while resizing; clear
 		// it so no stale rows survive under the repainted frame.
 		return m, tea.ClearScreen
@@ -513,6 +524,7 @@ func (m *Model) View() string {
 	if h > 0 && (w < minWidth || h < minHeight) {
 		return strings.Join(wrap(fmt.Sprintf("终端太小（%dx%d），请放大到至少 %dx%d", w, h, minWidth, minHeight), w), "\n")
 	}
+	w = min(w, maxWidth)
 	head := []string{m.tabs(w)}
 	if m.page == pageSettings {
 		head = append(append(head, ""), m.cardLines(w)...)
