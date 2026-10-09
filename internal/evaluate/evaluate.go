@@ -41,16 +41,19 @@ type Options struct {
 }
 
 type CaseResult struct {
-	ID             string         `json:"id"`
-	Query          string         `json:"query"`
-	Recall         float64        `json:"recallAtK"`
-	ReciprocalRank float64        `json:"reciprocalRank"`
-	LatencyMs      float64        `json:"latencyMs"`
-	Method         string         `json:"method"`
-	Degraded       string         `json:"degraded,omitempty"`
-	Error          string         `json:"error,omitempty"`
-	Hits           []rag.Hit      `json:"hits"`
-	Usage          rag.QueryUsage `json:"usage"`
+	ID             string  `json:"id"`
+	Query          string  `json:"query"`
+	Recall         float64 `json:"recallAtK"`
+	ReciprocalRank float64 `json:"reciprocalRank"`
+	// CandidateRecall, rerank mode only, is Recall over every candidate the
+	// reranker ordered: a label it misses never reached the reranker.
+	CandidateRecall *float64       `json:"candidateRecall,omitempty"`
+	LatencyMs       float64        `json:"latencyMs"`
+	Method          string         `json:"method"`
+	Degraded        string         `json:"degraded,omitempty"`
+	Error           string         `json:"error,omitempty"`
+	Hits            []rag.Hit      `json:"hits"`
+	Usage           rag.QueryUsage `json:"usage"`
 }
 
 type Summary struct {
@@ -61,6 +64,7 @@ type Summary struct {
 	Degraded         int            `json:"degraded"`
 	RecallAtK        float64        `json:"recallAtK"`
 	MRR              float64        `json:"mrr"`
+	CandidateRecall  *float64       `json:"candidateRecall,omitempty"`
 	P50LatencyMs     float64        `json:"p50LatencyMs"`
 	P95LatencyMs     float64        `json:"p95LatencyMs"`
 	Usage            rag.QueryUsage `json:"usage"`
@@ -81,14 +85,15 @@ type Environment struct {
 }
 
 type Report struct {
-	CreatedAt    string       `json:"createdAt"`
-	Dataset      string       `json:"dataset"`
-	Environment  *Environment `json:"environment,omitempty"`
-	Provenance   []string     `json:"provenance"`
-	TopK         int          `json:"topK"`
-	MetricPolicy string       `json:"metricPolicy"`
-	CostPolicy   string       `json:"costPolicy"`
-	Summaries    []Summary    `json:"summaries"`
+	CreatedAt     string       `json:"createdAt"`
+	Dataset       string       `json:"dataset"`
+	Environment   *Environment `json:"environment,omitempty"`
+	Provenance    []string     `json:"provenance"`
+	TopK          int          `json:"topK"`
+	CandidateTopK int          `json:"candidateTopK"`
+	MetricPolicy  string       `json:"metricPolicy"`
+	CostPolicy    string       `json:"costPolicy"`
+	Summaries     []Summary    `json:"summaries"`
 }
 
 func ReadCases(r io.Reader) ([]Case, error) {
@@ -199,8 +204,9 @@ func cost(usage rag.QueryUsage, opts Options) *float64 {
 }
 
 func Run(ctx context.Context, cases []Case, query QueryFunc, opts Options) (Report, error) {
-	report := Report{CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Dataset: opts.Dataset, TopK: opts.TopK,
-		MetricPolicy: "Recall and MRR include failed queries as zero; latency measures the query call at the evaluator; degraded calls are counted explicitly.",
+	candidates := max(30, opts.TopK)
+	report := Report{CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Dataset: opts.Dataset, TopK: opts.TopK, CandidateTopK: candidates,
+		MetricPolicy: "Recall and MRR include failed queries as zero; latency measures the query call at the evaluator; degraded calls are counted explicitly; rerank candidateRecall is Recall over all candidateTopK hybrid candidates the reranker orders.",
 		CostPolicy:   "Optional estimate from supplied USD rates and heuristic token counts; logical calls exclude HTTP retries; this is not provider billing.", Summaries: []Summary{}}
 	if len(cases) == 0 || query == nil || opts.TopK < 1 || opts.TopK > 200 || len(opts.Modes) == 0 {
 		return report, errors.New("require cases, modes and topK in [1,200]")
@@ -230,24 +236,37 @@ func Run(ctx context.Context, cases []Case, query QueryFunc, opts Options) (Repo
 	sort.Strings(report.Provenance)
 	for _, mode := range opts.Modes {
 		summary := Summary{Mode: mode, Cases: len(cases), Results: []CaseResult{}}
+		if mode == "rerank" {
+			summary.CandidateRecall = new(float64)
+		}
 		latencies := []float64{}
 		for _, c := range cases {
 			if err := ctx.Err(); err != nil {
 				return report, err
 			}
-			options := rag.QueryOptions{TopK: opts.TopK, CandidateTopK: max(30, opts.TopK), Mode: mode, DisableRerank: mode != "rerank"}
+			options := rag.QueryOptions{TopK: opts.TopK, CandidateTopK: candidates, Mode: mode, DisableRerank: mode != "rerank"}
 			if mode == "rerank" {
 				options.Mode = "hybrid"
 				options.RequireRerank = true
+				// Rerank scores do not depend on how many results are kept, so
+				// keeping every candidate leaves the top K unchanged.
+				options.TopK = candidates
 			}
 			started := time.Now()
 			result, err := query(ctx, c.Query, options)
-			r := CaseResult{ID: c.ID, Query: c.Query, LatencyMs: float64(time.Since(started).Microseconds()) / 1000, Method: result.Method, Degraded: result.Degraded, Hits: result.Hits, Usage: result.Usage}
+			r := CaseResult{ID: c.ID, Query: c.Query, LatencyMs: float64(time.Since(started).Microseconds()) / 1000, Method: result.Method, Degraded: result.Degraded, Hits: result.Hits[:min(opts.TopK, len(result.Hits))], Usage: result.Usage}
+			if mode == "rerank" {
+				r.CandidateRecall = new(float64)
+			}
 			if err != nil {
 				r.Error = err.Error()
 				summary.Failed++
 			} else {
 				r.Recall, r.ReciprocalRank = score(result.Hits, c.Relevant, opts.TopK)
+				if r.CandidateRecall != nil {
+					*r.CandidateRecall, _ = score(result.Hits, c.Relevant, candidates)
+					*summary.CandidateRecall += *r.CandidateRecall
+				}
 				summary.Successful++
 			}
 			if result.Degraded != "" {
@@ -261,6 +280,9 @@ func Run(ctx context.Context, cases []Case, query QueryFunc, opts Options) (Repo
 		}
 		summary.RecallAtK /= float64(len(cases))
 		summary.MRR /= float64(len(cases))
+		if summary.CandidateRecall != nil {
+			*summary.CandidateRecall /= float64(len(cases))
+		}
 		summary.P50LatencyMs = percentile(latencies, .5)
 		summary.P95LatencyMs = percentile(latencies, .95)
 		summary.EstimatedCostUSD = cost(summary.Usage, opts)

@@ -43,6 +43,39 @@ func TestMetricsIncludeFailuresAndCountEachLabelOnce(t *testing.T) {
 	}
 }
 
+func TestRerankReportsCandidateRecall(t *testing.T) {
+	cases := []Case{
+		{ID: "late", Query: "late", Relevant: []Relevant{{Contains: "gold"}}},
+		{ID: "failure", Query: "failure", Relevant: []Relevant{{Contains: "gold"}}},
+	}
+	query := func(_ context.Context, text string, opts rag.QueryOptions) (rag.QueryResult, error) {
+		if opts.TopK != 30 || opts.CandidateTopK != 30 {
+			t.Fatalf("rerank should keep every candidate: %+v", opts)
+		}
+		if text == "failure" {
+			return rag.QueryResult{}, errors.New("rerank failed")
+		}
+		return rag.QueryResult{Hits: []rag.Hit{{Chunk: model.Chunk{Content: "wrong"}}, {Chunk: model.Chunk{Content: "gold"}}}}, nil
+	}
+	r, err := Run(context.Background(), cases, query, Options{TopK: 1, Modes: []string{"rerank"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := r.Summaries[0]
+	if s.RecallAtK != 0 || s.CandidateRecall == nil || *s.CandidateRecall != .5 || r.CandidateTopK != 30 {
+		t.Fatalf("candidate recall: %+v", s)
+	}
+	if late := s.Results[0]; len(late.Hits) != 1 || *late.CandidateRecall != 1 || *s.Results[1].CandidateRecall != 0 {
+		t.Fatalf("case results: %+v", s.Results)
+	}
+	base, err := Run(context.Background(), cases[:1], func(context.Context, string, rag.QueryOptions) (rag.QueryResult, error) {
+		return rag.QueryResult{}, nil
+	}, Options{TopK: 1, Modes: []string{"hybrid"}})
+	if err != nil || base.Summaries[0].CandidateRecall != nil || base.Summaries[0].Results[0].CandidateRecall != nil {
+		t.Fatalf("baseline should omit candidate recall: %+v %v", base, err)
+	}
+}
+
 func TestDatasetRejectsAmbiguousInput(t *testing.T) {
 	valid := `{"id":"1","query":"q","relevant":[{"contains":"evidence"}]}`
 	for _, input := range []string{"", valid + "\n" + valid, valid + `{}`, `{"id":"1","query":"q","relevant":[{}]}`, `{"id":"1","query":"q","relevant":[{"contains":"x"}],"extra":true}`} {
