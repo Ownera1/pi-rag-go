@@ -43,6 +43,9 @@ func (c *session) cleanup(ctx context.Context, keep int, dryRun bool) (result Cl
 	}
 	for _, entry := range staged {
 		path := filepath.Join(staging, entry.Name())
+		if entry.Name() == finderMetadata {
+			continue
+		}
 		if !entry.IsDir() || !generationName.MatchString(entry.Name()) || !dbDir(path) {
 			result.Skipped = append(result.Skipped, path)
 			continue
@@ -90,6 +93,9 @@ func (c *session) cleanup(ctx context.Context, keep int, dryRun bool) (result Cl
 			return result, err
 		}
 		idPath := filepath.Join(root, id.Name())
+		if id.Name() == finderMetadata {
+			continue
+		}
 		if !id.IsDir() || !indexName.MatchString(id.Name()) {
 			result.Skipped = append(result.Skipped, idPath)
 			continue
@@ -104,6 +110,9 @@ func (c *session) cleanup(ctx context.Context, keep int, dryRun bool) (result Cl
 				return result, err
 			}
 			path := filepath.Join(idPath, entry.Name())
+			if entry.Name() == finderMetadata {
+				continue
+			}
 			if path == active {
 				result.Retained = append(result.Retained, path)
 				continue
@@ -158,10 +167,28 @@ func (c *session) cleanup(ctx context.Context, keep int, dryRun bool) (result Cl
 	}
 	if !dryRun {
 		for _, p := range idPaths {
-			_ = os.Remove(p) // fails on any directory still holding something
+			removeEmptyDir(p)
 		}
 	}
 	return result, nil
+}
+
+// finderMetadata is the file macOS Finder writes into every folder it opens.
+const finderMetadata = ".DS_Store"
+
+// removeEmptyDir removes dir when it holds nothing but Finder metadata.
+func removeEmptyDir(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.Name() != finderMetadata || !entry.Type().IsRegular() {
+			return
+		}
+	}
+	_ = os.Remove(filepath.Join(dir, finderMetadata))
+	_ = os.Remove(dir)
 }
 
 func knownGeneration(path string) bool {
@@ -183,7 +210,7 @@ func knownDB(path string) bool {
 }
 
 // dbDir reports whether path is a real directory holding rag.db and nothing
-// but its WAL files.
+// but its WAL files and Finder metadata.
 func dbDir(path string) bool {
 	info, err := os.Lstat(path)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
@@ -201,7 +228,7 @@ func dbDir(path string) bool {
 		switch entry.Name() {
 		case "rag.db":
 			hasDB = true
-		case "rag.db-wal", "rag.db-shm":
+		case "rag.db-wal", "rag.db-shm", finderMetadata:
 		default:
 			return false
 		}
