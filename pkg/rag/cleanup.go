@@ -18,7 +18,8 @@ var generationName = regexp.MustCompile(`^[0-9]+-[0-9a-f]{16}$`)
 
 // Cleanup retains the active generation and the newest inactive generations,
 // keeping at least keep generations in total. Unknown files and symlinks are
-// never removed. dryRun reports candidates without deleting them.
+// never removed; fingerprint directories left empty are. dryRun reports
+// candidates without deleting them.
 func (c *session) cleanup(ctx context.Context, keep int, dryRun bool) (result CleanupResult, err error) {
 	result = CleanupResult{DryRun: dryRun, Retained: []string{}, Removed: []string{}, Skipped: []string{}}
 	if err = c.writable(); err != nil {
@@ -73,6 +74,13 @@ func (c *session) cleanup(ctx context.Context, keep int, dryRun bool) (result Cl
 		created int64
 	}
 	all := []generation{}
+	// The first sync writes .rag-go/rag.db, which nothing reads once a rebuild
+	// has published a generation. It is the oldest one.
+	legacy := filepath.Join(c.root, "rag.db")
+	if active != "" && active != c.root && knownDB(legacy) {
+		all = append(all, generation{legacy, 0})
+	}
+	idPaths := []string{}
 	ids, err := os.ReadDir(root)
 	if err != nil {
 		return result, err
@@ -86,6 +94,7 @@ func (c *session) cleanup(ctx context.Context, keep int, dryRun bool) (result Cl
 			result.Skipped = append(result.Skipped, idPath)
 			continue
 		}
+		idPaths = append(idPaths, idPath)
 		entries, e := os.ReadDir(idPath)
 		if e != nil {
 			return result, e
@@ -133,24 +142,38 @@ func (c *session) cleanup(ctx context.Context, keep int, dryRun bool) (result Cl
 		}
 		if !dryRun {
 			// Revalidate after enumeration before deleting a recognized generation.
-			if !knownGeneration(g.path) {
+			known, remove := knownGeneration, os.RemoveAll
+			if g.path == legacy {
+				known, remove = knownDB, removeDB
+			}
+			if !known(g.path) {
 				result.Skipped = append(result.Skipped, g.path)
 				continue
 			}
-			if err = os.RemoveAll(g.path); err != nil {
+			if err = remove(g.path); err != nil {
 				return result, err
 			}
 		}
 		result.Removed = append(result.Removed, g.path)
 	}
+	if !dryRun {
+		for _, p := range idPaths {
+			_ = os.Remove(p) // fails on any directory still holding something
+		}
+	}
 	return result, nil
 }
 
 func knownGeneration(path string) bool {
-	if !dbDir(path) {
+	return dbDir(path) && knownDB(filepath.Join(path, "rag.db"))
+}
+
+// knownDB reports whether path is a regular file holding a rag-go store.
+func knownDB(path string) bool {
+	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
 		return false
 	}
-	db, err := store.Open(filepath.Join(path, "rag.db"), true, 0)
+	db, err := store.Open(path, true, 0)
 	if err != nil {
 		return false
 	}

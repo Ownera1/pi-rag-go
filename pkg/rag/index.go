@@ -466,5 +466,12 @@ func (c *session) rebuild(ctx context.Context) (result IndexResult, err error) {
 	if _, err = c.reconcileZotero(ctx); err != nil {
 		return result, err
 	}
-	return result, c.record(snap, result)
+	if err = c.record(snap, result); err != nil {
+		return result, err
+	}
+	// Older generations stay only as a manual rollback; keep the previous one.
+	if _, err = c.cleanup(ctx, 2, false); err != nil {
+		return result, fmt.Errorf("rebuild published; removing old generations: %w", err)
+	}
+	return result, nil
 }

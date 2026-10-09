@@ -177,7 +177,7 @@ def smoke(binaries):
             for _ in range(3):
                 assert cli("rebuild")["failed"] == 0
             assert cli("clean", "--keep", "1")["dryRun"]
-            assert len(cli("clean", "--keep", "1", "--confirm")["removed"]) == 2
+            assert len(cli("clean", "--keep", "1", "--confirm")["removed"]) == 1
             dataset = root / "questions.jsonl"
             dataset.write_text(json.dumps({"id": "one", "query": "channel estimation",
                                "relevant": [{"pathSuffix": "first.txt", "contains": "channel estimation"}]}) + "\n")
