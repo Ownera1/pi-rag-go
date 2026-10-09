@@ -255,9 +255,24 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 		hits = hits[:recall]
 	}
 	if reranker != nil && len(hits) > 0 {
+		entries, err := c.documentInfos(ctx)
+		if err != nil {
+			return out, err
+		}
+		titles := map[string]string{}
+		for _, d := range entries {
+			titles[d.info.Path] = d.info.Title
+		}
+		// Prefix "title > section" as indexing did for the embedding, so the
+		// reranker can tell which paper a shared section such as Complexity
+		// Analysis belongs to.
 		docs := make([]model.RerankDoc, len(hits))
 		for i, h := range hits {
-			docs[i] = model.RerankDoc{ID: h.Chunk.ID, Text: h.Chunk.Content}
+			text := h.Chunk.Content
+			if head := heading(titles[h.Chunk.Path], h.Chunk.Section); head != "" {
+				text = head + "\n\n" + text
+			}
+			docs[i] = model.RerankDoc{ID: h.Chunk.ID, Text: text}
 		}
 		out.Usage.RerankCalls++
 		out.Usage.EstimatedRerankTokens += chunk.Estimate(query)

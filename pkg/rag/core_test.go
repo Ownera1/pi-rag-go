@@ -609,3 +609,40 @@ func TestRequiredRerankFailureIsAnError(t *testing.T) {
 		t.Fatalf("optional rerank: %+v %v", r, err)
 	}
 }
+
+type recordingReranker struct{ texts *[]string }
+
+func (recordingReranker) Model() string { return "fake" }
+func (r recordingReranker) Rerank(_ context.Context, _ string, docs []model.RerankDoc, _ int) ([]model.RerankResult, error) {
+	out := []model.RerankResult{}
+	for _, d := range docs {
+		*r.texts = append(*r.texts, d.Text)
+		out = append(out, model.RerankResult{ID: d.ID, Score: 1})
+	}
+	return out, nil
+}
+
+func TestRerankSeesTitleAndSection(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	c := openTest(t, root, fakeEmbedding{})
+	if err := os.WriteFile(docPath(c, "a.md"), []byte("# Paper\n\n## Complexity Analysis\n\nstable evidence\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := c.Sync(ctx); err != nil || r.Failed > 0 {
+		t.Fatalf("sync: %+v %v", r, err)
+	}
+	c.Close()
+	texts := []string{}
+	c, err := Open(Options{WorkspaceDir: root, Embedder: fakeEmbedding{}, Reranker: recordingReranker{&texts}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err = c.Query(ctx, "evidence", QueryOptions{RequireRerank: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(texts) == 0 || !strings.HasPrefix(texts[0], "a.md > Paper / Complexity Analysis\n\n") {
+		t.Fatalf("reranker texts: %q", texts)
+	}
+}
