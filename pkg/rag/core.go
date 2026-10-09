@@ -221,14 +221,20 @@ func (s *session) ensureDB(ctx context.Context) error {
 		// canceled initial stamp must not leave an unrecognized partial store.
 		_ = db.Close()
 		s.db = nil
-		for _, suffix := range []string{"", "-wal", "-shm"} {
-			if e := os.Remove(db.Path + suffix); e != nil && !errors.Is(e, os.ErrNotExist) {
-				err = errors.Join(err, e)
-			}
-		}
-		return err
+		return errors.Join(err, removeDB(db.Path))
 	}
 	return nil
+}
+
+// removeDB deletes a SQLite database and its WAL sidecars.
+func removeDB(path string) error {
+	var err error
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if e := os.Remove(path + suffix); e != nil && !errors.Is(e, os.ErrNotExist) {
+			err = errors.Join(err, e)
+		}
+	}
+	return err
 }
 
 func fingerprint(cfg Config) (string, string) {

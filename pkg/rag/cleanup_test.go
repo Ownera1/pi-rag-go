@@ -6,7 +6,23 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Ownera1/rag-go/internal/store"
 )
+
+// fakeGeneration writes a minimal recognized store at dir/rag.db.
+func fakeGeneration(t *testing.T, dir string) string {
+	t.Helper()
+	db, err := store.Open(filepath.Join(dir, "rag.db"), false, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err = db.SQL.Exec("INSERT OR REPLACE INTO metadata(key,value) VALUES('go_storage_version','1')"); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
 
 func TestCleanupPreviewRetainsActiveAndUnknownFiles(t *testing.T) {
 	ctx := context.Background()
@@ -21,6 +37,9 @@ func TestCleanupPreviewRetainsActiveAndUnknownFiles(t *testing.T) {
 	if r, e := c.Sync(ctx); e != nil || r.Failed > 0 {
 		t.Fatalf("index: %+v %v", r, e)
 	}
+	// Each rebuild keeps the previous generation, the first sync's database
+	// counting as one, and removes older ones.
+	legacy := filepath.Join(dir, ".rag-go", "rag.db")
 	generations := []string{}
 	for i := 0; i < 3; i++ {
 		if _, err := c.Rebuild(ctx); err != nil {
@@ -31,17 +50,31 @@ func TestCleanupPreviewRetainsActiveAndUnknownFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		generations = append(generations, filepath.Dir(s.ActiveDB))
+		if _, err = os.Stat(legacy); (err == nil) != (i == 0) {
+			t.Fatalf("rebuild %d: first sync database %v", i, err)
+		}
+	}
+	for _, path := range []string{generations[0], legacy + "-wal", legacy + "-shm"} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("rebuild kept %s: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(generations[1]); err != nil {
+		t.Fatal("rebuild removed the previous generation", err)
 	}
 	// Directory mtime can change during read-only SQLite inspections and must
 	// not determine which generation is newest.
+	older := fakeGeneration(t, filepath.Join(filepath.Dir(generations[1]), "1-0000000000000001"))
 	future := time.Now().Add(time.Hour)
-	if err := os.Chtimes(generations[0], future, future); err != nil {
+	if err := os.Chtimes(older, future, future); err != nil {
 		t.Fatal(err)
 	}
 	previewTwo, err := c.Cleanup(ctx, 2, true)
-	if err != nil || len(previewTwo.Removed) != 1 || previewTwo.Removed[0] != generations[0] {
+	if err != nil || len(previewTwo.Removed) != 1 || previewTwo.Removed[0] != older {
 		t.Fatalf("retention order: %+v %v", previewTwo, err)
 	}
+	// A generation of another fingerprint leaves its directory empty.
+	stale := fakeGeneration(t, filepath.Join(dir, ".rag-go", "indexes", "1111111111-1111111111", "1-0000000000000002"))
 	s, err := c.Status(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -63,11 +96,12 @@ func TestCleanupPreviewRetainsActiveAndUnknownFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := t.TempDir()
-	if err = os.Symlink(out, filepath.Join(dir, ".rag-go", "indexes", "linked")); err != nil {
+	linked := filepath.Join(dir, ".rag-go", "indexes", "linked")
+	if err = os.Symlink(out, linked); err != nil {
 		t.Fatal(err)
 	}
 	preview, err := c.Cleanup(ctx, 1, true)
-	if err != nil || len(preview.Removed) != 3 {
+	if err != nil || len(preview.Removed) != 4 {
 		t.Fatalf("preview: %+v %v", preview, err)
 	}
 	for _, path := range preview.Removed {
@@ -76,7 +110,7 @@ func TestCleanupPreviewRetainsActiveAndUnknownFiles(t *testing.T) {
 		}
 	}
 	removed, err := c.Cleanup(ctx, 1, false)
-	if err != nil || len(removed.Removed) != 3 {
+	if err != nil || len(removed.Removed) != 4 {
 		t.Fatalf("cleanup: %+v %v", removed, err)
 	}
 	for _, path := range removed.Removed {
@@ -89,6 +123,12 @@ func TestCleanupPreviewRetainsActiveAndUnknownFiles(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(unknown, "personal.txt")); err != nil {
 		t.Fatal("unknown file removed", err)
+	}
+	if _, err = os.Lstat(linked); err != nil {
+		t.Fatal("symlink removed", err)
+	}
+	if _, err = os.Stat(filepath.Dir(stale)); !os.IsNotExist(err) {
+		t.Fatalf("empty fingerprint directory kept: %v", err)
 	}
 	q, err := c.Query(ctx, "stable evidence", QueryOptions{})
 	if err != nil || len(q.Hits) == 0 {

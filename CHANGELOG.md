@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `rag rebuild` (and the TUI and MCP rebuild) cleans up after publishing: it keeps the new index and the previous one for a manual rollback, and deletes older generations. `rag clean` also deletes `.rag-go/rag.db`, written by the first sync and never read again once a rebuild has published, and the fingerprint directories under `.rag-go/indexes` that deleting generations leaves empty. Unknown files and symlinks are still never removed. On a copy of a real workspace holding 18 generations in 8 fingerprint directories (126 MB), `rag clean --keep 2`, what a rebuild now does, left 2 generations in 2 directories (17 MB) with the same 6 documents and 760 chunks.
+
 ## v0.6.2 (2026-10-08)
 
 No rebuild needed: v0.6.x indexes stay compatible.
