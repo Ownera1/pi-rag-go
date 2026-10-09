@@ -208,10 +208,9 @@ Smoke suite 使用解压后的实际二进制和固定的本地 HTTP provider，
 ## 评估与 Go API
 
 ```sh
-rag eval --dataset evaluation/sample/questions.jsonl --modes bm25,vector,hybrid \
-  --output evaluation/runs/sample.json
+rag eval --dataset evaluation/sample/questions.jsonl --output evaluation/runs/sample.json
 ```
 
-评估直接调用 Core，需要已同步且兼容的索引，运行期间不会自动同步。报告包含 Recall@K、MRR、p50/p95 延迟、失败、降级、usage 及可选费用估算，另有 `environment` 记录构建版本（`rag version`；直接 `go build` 的版本为其 Git 提交，有未提交改动时带 `-dirty`）、工作区配置、当前索引、每篇文档的 version 和数据集的 SHA-256，两份报告的分数不同时可据此查明原因。样例数据为合成数据，详见 [评估说明](evaluation/README.md)。
+不指定 `--modes` 时评估 `bm25`、`vector` 和 `hybrid`（均不重排），工作区配置了 reranker 时再加 `rerank`。评估直接调用 Core，需要已同步且兼容的索引，运行期间不会自动同步。报告包含 Recall@K、MRR、p50/p95 延迟、失败、降级、usage 及可选费用估算，另有 `environment` 记录构建版本（`rag version`；直接 `go build` 的版本为其 Git 提交，有未提交改动时带 `-dirty`）、工作区配置、当前索引、每篇文档的 version 和数据集的 SHA-256，两份报告的分数不同时可据此查明原因。样例数据为合成数据，详见 [评估说明](evaluation/README.md)。
 
 `pkg/rag` 提供 `Open(Options{WorkspaceDir, ReadOnly, Embedder, Reranker})`，以及 `Core.Sync`、`Query`、`Documents`、`Read`、`Outline`、`Status`、`ListDocuments`、`Rebuild`、`Cleanup`、`SyncZotero`、`MatchZotero`、`LinkZotero`、`ZoteroStatus`、`ZoteroLinks`、`Close` 和 `DefaultConfig`。操作接收 `context.Context`；注入的 provider 须支持并发调用。Core 不依赖 MCP 或外部文档提取工具。
