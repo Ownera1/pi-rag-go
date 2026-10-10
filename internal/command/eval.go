@@ -33,7 +33,7 @@ func rate(value string) (*float64, error) {
 func Evaluate(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("rag eval", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	root := flags.String("workspace", "", "workspace root")
+	root := workspaceFlag(flags)
 	dataset := flags.String("dataset", "", "annotated JSONL evaluation dataset")
 	modes := flags.String("modes", "", "comma-separated modes (default bm25,vector,hybrid, plus rerank when a reranker is configured)")
 	topK := flags.Int("top-k", 5, "retrieval evaluation cutoff")
@@ -62,9 +62,13 @@ func Evaluate(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
-	core, err := rag.Open(rag.Options{WorkspaceDir: *root, ReadOnly: true})
+	dir, err := workspace.Resolve(*root)
 	if err != nil {
 		return err
+	}
+	core, err := rag.Open(rag.Options{WorkspaceDir: dir, ReadOnly: true})
+	if err != nil {
+		return explainMissing(err)
 	}
 	defer core.Close()
 	status, err := core.Status(ctx)

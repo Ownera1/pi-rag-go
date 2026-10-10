@@ -16,7 +16,7 @@ import (
 func Zotero(ctx context.Context, args []string, out, errout io.Writer) error {
 	fs := flag.NewFlagSet("rag zotero", flag.ContinueOnError)
 	fs.SetOutput(errout)
-	root := fs.String("workspace", "", "explicit workspace root")
+	root := workspaceFlag(fs)
 	kind := fs.String("library-type", "", "user or group")
 	id := fs.String("library-id", "", "library ID; 0 means current user")
 	base := fs.String("base-url", "", "Zotero loopback Local API URL")
@@ -36,9 +36,12 @@ func Zotero(ctx context.Context, args []string, out, errout io.Writer) error {
 	if (cmd == "link" && fs.NArg() != 3) || (cmd != "link" && fs.NArg() != 1) {
 		return errors.New("unexpected Zotero arguments; link requires DOCUMENT ITEM_KEY")
 	}
-	resolved, err := workspace.Discover(*root)
+	resolved, err := workspace.Resolve(*root)
 	if err != nil {
 		return err
+	}
+	if resolved, err = workspace.Discover(resolved); err != nil {
+		return explainMissing(err)
 	}
 	cfg, err := model.LoadConfig(filepath.Join(workspace.Store(resolved), "config.json"))
 	if err != nil {
