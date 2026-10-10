@@ -89,7 +89,7 @@ func parseDOCX(ctx context.Context, b []byte) ([]model.Block, error) {
 		}
 	}
 	blocks := []model.Block{}
-	levels := map[int]string{}
+	levels := headings{}
 	var text func(*xmlNode) string
 	text = func(n *xmlNode) string {
 		if !wordNS(n.name.Space) || n.name.Local == "del" || n.name.Local == "drawing" || n.name.Local == "instrText" {
@@ -150,20 +150,9 @@ func parseDOCX(ctx context.Context, b []byte) ([]model.Block, error) {
 				}
 			}
 			if level >= 1 && level <= 6 {
-				for l := range levels {
-					if l >= level {
-						delete(levels, l)
-					}
-				}
-				levels[level] = value
+				levels.open(level, value)
 			}
-			path := []string{}
-			for l := 1; l <= 6; l++ {
-				if v := levels[l]; v != "" {
-					path = append(path, v)
-				}
-			}
-			blocks = append(blocks, model.Block{Text: value, Section: section(path)})
+			blocks = append(blocks, model.Block{Text: value, Section: section(levels.path())})
 			return nil
 		}
 		for _, c := range n.children() {

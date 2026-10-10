@@ -21,6 +21,7 @@ import (
 
 	"github.com/Ownera1/rag-go/internal/model"
 	"github.com/Ownera1/rag-go/internal/searchtext"
+	"github.com/Ownera1/rag-go/internal/workspace"
 )
 
 var loadOnce sync.Once
@@ -174,14 +175,25 @@ func ResolvePath(root string) (string, error) {
 		return "", errors.New("invalid active manifest")
 	}
 	p := filepath.Join(root, m.RelativeDBPath)
-	rel, e := filepath.Rel(root, p)
-	if e != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+	if !workspace.Within(root, p) {
 		return "", errors.New("active manifest escapes store")
 	}
 	if _, err = os.Stat(p); err != nil {
 		return "", err
 	}
 	return p, nil
+}
+
+// Recognized reports whether the database at path is a rag-go store, reading
+// it without initializing any schema.
+func Recognized(ctx context.Context, path string) (bool, error) {
+	db, err := Open(path, true, 0)
+	if err != nil {
+		return false, err
+	}
+	defer db.Close()
+	version, err := db.GetMetadata(ctx, "go_storage_version")
+	return version == "1", err
 }
 
 // GetMetadata returns "" for a missing key or a database without rag-go's
@@ -294,13 +306,7 @@ func (d *DB) Replace(ctx context.Context, doc model.Document, chunks []model.Chu
 		return e
 	}
 	for _, path := range obsolete {
-		if _, e = tx.ExecContext(ctx, "DELETE FROM chunks_vec WHERE rowid IN (SELECT rowid FROM chunks WHERE file_path=?)", path); e != nil {
-			return e
-		}
-		if _, e = tx.ExecContext(ctx, "DELETE FROM chunks WHERE file_path=?", path); e != nil {
-			return e
-		}
-		if _, e = tx.ExecContext(ctx, "DELETE FROM files WHERE path=?", path); e != nil {
+		if e = deletePath(ctx, tx, path); e != nil {
 			return e
 		}
 	}
@@ -394,16 +400,25 @@ func (d *DB) Delete(ctx context.Context, path string) error {
 		return e
 	}
 	defer tx.Rollback()
-	if _, e = tx.ExecContext(ctx, "DELETE FROM chunks_vec WHERE rowid IN (SELECT rowid FROM chunks WHERE file_path=?)", path); e != nil {
-		return e
-	}
-	if _, e = tx.ExecContext(ctx, "DELETE FROM chunks WHERE file_path=?", path); e != nil {
-		return e
-	}
-	if _, e = tx.ExecContext(ctx, "DELETE FROM files WHERE path=?", path); e != nil {
+	if e = deletePath(ctx, tx, path); e != nil {
 		return e
 	}
 	return tx.Commit()
+}
+
+// deletePath removes path's chunks, with their vectors, and its file row; the
+// triggers on chunks clear the full-text tables.
+func deletePath(ctx context.Context, tx *sql.Tx, path string) error {
+	for _, q := range []string{
+		"DELETE FROM chunks_vec WHERE rowid IN (SELECT rowid FROM chunks WHERE file_path=?)",
+		"DELETE FROM chunks WHERE file_path=?",
+		"DELETE FROM files WHERE path=?",
+	} {
+		if _, err := tx.ExecContext(ctx, q, path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) List(ctx context.Context) ([]string, error) {
@@ -460,24 +475,19 @@ type Match struct {
 }
 
 func (d *DB) FTS(ctx context.Context, query string, limit int, filtered ...bool) ([]Match, error) {
-	rows, e := d.SQL.QueryContext(ctx, "SELECT rowid,bm25(chunks_fts) FROM chunks_fts WHERE chunks_fts MATCH ?"+filterSQL(filtered)+" ORDER BY bm25(chunks_fts) LIMIT ?", query, limit)
-	if e != nil {
-		return nil, e
-	}
-	defer rows.Close()
-	out := []Match{}
-	for rows.Next() {
-		var m Match
-		if e = rows.Scan(&m.RowID, &m.Score); e != nil {
-			return nil, e
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
+	return d.matches(ctx, "SELECT rowid,bm25(chunks_fts) FROM chunks_fts WHERE chunks_fts MATCH ?"+filterSQL(filtered)+" ORDER BY bm25(chunks_fts) LIMIT ?", query, limit)
 }
 
 func (d *DB) FTSHan(ctx context.Context, query string, limit int, filtered ...bool) ([]Match, error) {
-	rows, err := d.SQL.QueryContext(ctx, "SELECT rowid,bm25(chunks_cjk) FROM chunks_cjk WHERE chunks_cjk MATCH ?"+filterSQL(filtered)+" ORDER BY bm25(chunks_cjk) LIMIT ?", query, limit)
+	return d.matches(ctx, "SELECT rowid,bm25(chunks_cjk) FROM chunks_cjk WHERE chunks_cjk MATCH ?"+filterSQL(filtered)+" ORDER BY bm25(chunks_cjk) LIMIT ?", query, limit)
+}
+
+func (d *DB) Vectors(ctx context.Context, vector []float32, limit int, filtered ...bool) ([]Match, error) {
+	return d.matches(ctx, "SELECT rowid,distance FROM chunks_vec WHERE embedding MATCH ?"+filterSQL(filtered)+" LIMIT ?", vecBytes(vector), limit)
+}
+
+func (d *DB) matches(ctx context.Context, q string, args ...any) ([]Match, error) {
+	rows, err := d.SQL.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -487,23 +497,6 @@ func (d *DB) FTSHan(ctx context.Context, query string, limit int, filtered ...bo
 		var m Match
 		if err = rows.Scan(&m.RowID, &m.Score); err != nil {
 			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
-}
-
-func (d *DB) Vectors(ctx context.Context, vector []float32, limit int, filtered ...bool) ([]Match, error) {
-	rows, e := d.SQL.QueryContext(ctx, "SELECT rowid,distance FROM chunks_vec WHERE embedding MATCH ?"+filterSQL(filtered)+" LIMIT ?", vecBytes(vector), limit)
-	if e != nil {
-		return nil, e
-	}
-	defer rows.Close()
-	out := []Match{}
-	for rows.Next() {
-		var m Match
-		if e = rows.Scan(&m.RowID, &m.Score); e != nil {
-			return nil, e
 		}
 		out = append(out, m)
 	}

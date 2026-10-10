@@ -39,6 +39,30 @@ func section(path []string) *string {
 	return &s
 }
 
+// headings holds the open heading at each level, 1 to 6.
+type headings map[int]string
+
+// open sets the heading at level, closing it and every deeper one.
+func (h headings) open(level int, title string) {
+	for l := range h {
+		if l >= level {
+			delete(h, l)
+		}
+	}
+	h[level] = title
+}
+
+// path returns the open headings from level 1 down.
+func (h headings) path() []string {
+	path := []string{}
+	for l := 1; l <= 6; l++ {
+		if title := h[l]; title != "" {
+			path = append(path, title)
+		}
+	}
+	return path
+}
+
 // inReferences reports a heading path inside a bibliography, which is not
 // indexed.
 func inReferences(path []string) bool {

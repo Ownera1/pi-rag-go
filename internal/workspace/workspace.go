@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,6 +16,13 @@ import (
 )
 
 func Store(root string) string { return filepath.Join(root, ".rag-go") }
+
+// Within reports whether path is root or lies under it, comparing the paths
+// as given.
+func Within(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
 
 // ErrNotFound reports a directory with no workspace at or above it.
 var ErrNotFound = errors.New("no rag-go workspace")

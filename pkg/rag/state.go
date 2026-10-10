@@ -53,11 +53,6 @@ func loadState(root string) (savedState, error) {
 	return s, err
 }
 
-func within(root, path string) bool {
-	rel, err := filepath.Rel(root, path)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
 func addFailure(r *IndexResult, path, stage string, err error) {
 	r.Failed++
 	r.Errors = append(r.Errors, path+": "+err.Error())

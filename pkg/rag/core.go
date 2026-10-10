@@ -126,7 +126,7 @@ func (c *Core) operation(ctx context.Context, write bool) (*session, error) {
 		s.docs = filepath.Join(s.workspace, s.docs)
 	}
 	s.docs = filepath.Clean(s.docs)
-	if within(s.root, s.docs) {
+	if workspace.Within(s.root, s.docs) {
 		return fail(errors.New("documents cannot be inside .rag-go"))
 	}
 	s.state, err = loadState(s.root)
@@ -140,16 +140,11 @@ func (c *Core) operation(ctx context.Context, write bool) (*session, error) {
 	}
 	if _, err = os.Stat(dbPath); err == nil {
 		// Inspect before any schema initialization, including writable operations.
-		probe, e := store.Open(dbPath, true, 0)
+		ok, e := store.Recognized(ctx, dbPath)
 		if e != nil {
 			return fail(e)
 		}
-		version, e := probe.GetMetadata(ctx, "go_storage_version")
-		probe.Close()
-		if e != nil {
-			return fail(e)
-		}
-		if version != "1" {
+		if !ok {
 			return fail(errors.New("existing database is not a recognized Go store; initialize a separate workspace and rebuild"))
 		}
 		s.db, err = store.Open(dbPath, !write, s.cfg.Embedding.Dimensions)

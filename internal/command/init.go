@@ -124,8 +124,7 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 	if !filepath.IsAbs(resolvedDocs) {
 		resolvedDocs = filepath.Join(root, resolvedDocs)
 	}
-	rel, _ := filepath.Rel(storeDir, resolvedDocs)
-	if rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if workspace.Within(storeDir, resolvedDocs) {
 		return errors.New("documents cannot be inside .rag-go")
 	}
 	keys := map[string]string{}
@@ -177,16 +176,11 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 		return e
 	}
 	if _, e = os.Stat(dbPath); e == nil {
-		db, e := store.Open(dbPath, true, 0)
+		ok, e := store.Recognized(ctx, dbPath)
 		if e != nil {
 			return e
 		}
-		version, e := db.GetMetadata(ctx, "go_storage_version")
-		db.Close()
-		if e != nil {
-			return e
-		}
-		if version != "1" {
+		if !ok {
 			return errors.New("existing database is not a recognized Go store; initialize a separate workspace")
 		}
 	} else if !errors.Is(e, os.ErrNotExist) {

@@ -33,7 +33,7 @@ func markdown(ctx context.Context, source []byte) ([]model.Block, error) {
 		skip    bool
 	}
 	starts := []boundary{{offset: 0}}
-	levels := map[int]string{}
+	levels := headings{}
 	err := ast.Walk(tree, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if err := ctx.Err(); err != nil {
 			return ast.WalkStop, err
@@ -49,18 +49,8 @@ func markdown(ctx context.Context, source []byte) ([]model.Block, error) {
 		for offset > 0 && source[offset-1] != '\n' {
 			offset--
 		}
-		for level := range levels {
-			if level >= h.Level {
-				delete(levels, level)
-			}
-		}
-		levels[h.Level] = strings.TrimSpace(string(h.Text(source)))
-		path := []string{}
-		for level := 1; level <= 6; level++ {
-			if title := levels[level]; title != "" {
-				path = append(path, title)
-			}
-		}
+		levels.open(h.Level, strings.TrimSpace(string(h.Text(source))))
+		path := levels.path()
 		b := boundary{offset, section(path), inReferences(path)}
 		if offset == 0 {
 			starts[0] = b
