@@ -70,7 +70,7 @@ func (c ZoteroConfig) Validate() error {
 	}
 	n, err := strconv.ParseUint(c.LibraryID, 10, 64)
 	if err != nil || (c.LibraryType == "group" && n == 0) {
-		return errors.New("invalid Zotero libraryId")
+		return errors.New("zotero.libraryId must be a number, and not 0 for a group library")
 	}
 	return nil
 }

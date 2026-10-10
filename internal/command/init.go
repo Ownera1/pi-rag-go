@@ -134,7 +134,7 @@ func Initialize(ctx context.Context, args []string, in io.Reader, out, stderr io
 		if name == "" {
 			continue
 		}
-		if !workspace.EnvName.MatchString(name) {
+		if !model.EnvName.MatchString(name) {
 			return errors.New("invalid apiKeyEnv")
 		}
 		// Persist environment and typed keys in the workspace for agents that

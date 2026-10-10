@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"net/url"
 	"os"
+	"regexp"
 )
 
 func DefaultConfig() Config {
@@ -87,32 +90,80 @@ func (c Config) Validate() error {
 	if c.Embedding.Type != "voyage" && c.Embedding.Type != "openai" {
 		return fmt.Errorf("unsupported embedding type %q", c.Embedding.Type)
 	}
-	if c.Embedding.Model == "" || c.Embedding.Dimensions < 1 || c.Embedding.Dimensions > 4096 {
-		return errors.New("embedding model and dimensions are required (1..4096)")
+	if c.Embedding.Model == "" {
+		return errors.New("embedding.model is required")
 	}
 	if c.Reranker.Type != "none" && c.Reranker.Type != "voyage" && c.Reranker.Type != "http" {
 		return fmt.Errorf("unsupported reranker type %q", c.Reranker.Type)
 	}
+	if c.Reranker.Type != "none" && c.Reranker.Model == "" {
+		return errors.New("reranker.model is required unless reranker.type is none")
+	}
+	for _, p := range []struct {
+		name string
+		ProviderConfig
+	}{{"embedding", c.Embedding}, {"reranker", c.Reranker}} {
+		if u, err := url.Parse(p.BaseURL); p.BaseURL != "" && (err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "") {
+			return fmt.Errorf("%s.baseUrl must be an http(s) URL", p.name)
+		}
+		// Catches a key pasted in place of the variable that holds it.
+		if p.APIKeyEnv != "" && !EnvName.MatchString(p.APIKeyEnv) {
+			return fmt.Errorf("%s.apiKeyEnv must be an environment variable name, not the key itself", p.name)
+		}
+	}
 	if c.Chunking.Mode != "semantic" && c.Chunking.Mode != "legacy" {
 		return errors.New("chunking mode must be semantic or legacy")
 	}
-	b := c.Chunking
-	if b.LegacyTarget < 1 || b.LegacyMax < b.LegacyTarget || b.LegacyMax > 8192 ||
-		b.LegacyOverlap < 0 || b.LegacyOverlap >= b.LegacyTarget ||
-		b.SemanticMin < 1 || b.SemanticTarget < b.SemanticMin || b.SemanticMax < b.SemanticTarget ||
-		b.SemanticMax > 8192 || b.SemanticUnitMax < 1 || b.SemanticUnitMax > b.SemanticMax {
-		return errors.New("invalid chunking thresholds")
+	if !(c.Alpha >= 0 && c.Alpha <= 1) { // also rejects NaN
+		return errors.New("alpha must be between 0 and 1")
 	}
-	if c.Indexing.Workers < 1 || c.Indexing.Workers > 64 || c.Indexing.SemanticWorkers < 1 ||
-		c.Indexing.SemanticWorkers > c.Indexing.Workers || c.Indexing.EmbeddingWorkers < 1 || c.Indexing.EmbeddingWorkers > 64 ||
-		c.Indexing.EmbeddingBatchSize < 1 || c.Indexing.EmbeddingBatchSize > 256 {
-		return errors.New("invalid indexing concurrency or embedding batch size")
-	}
-	if c.Alpha < 0 || c.Alpha > 1 || c.TopK < 1 || c.CandidateTopK < c.TopK || c.CandidateTopK > 200 {
-		return errors.New("invalid retrieval limits or alpha")
-	}
-	if c.HTTPTimeoutMs < 1000 || c.HTTPMaxRetries < 0 || c.HTTPMaxRetries > 8 {
-		return errors.New("invalid HTTP policy")
+	b, n := c.Chunking, c.Indexing
+	for _, l := range []limit{
+		{"embedding.dimensions", c.Embedding.Dimensions, 1, 4096, "", ""},
+		{"chunking.legacyTarget", b.LegacyTarget, 1, math.MaxInt, "", ""},
+		{"chunking.legacyMax", b.LegacyMax, b.LegacyTarget, 8192, "chunking.legacyTarget", ""},
+		{"chunking.legacyOverlap", b.LegacyOverlap, 0, b.LegacyTarget - 1, "", "chunking.legacyTarget - 1"},
+		{"chunking.semanticMin", b.SemanticMin, 1, math.MaxInt, "", ""},
+		{"chunking.semanticTarget", b.SemanticTarget, b.SemanticMin, math.MaxInt, "chunking.semanticMin", ""},
+		{"chunking.semanticMax", b.SemanticMax, b.SemanticTarget, 8192, "chunking.semanticTarget", ""},
+		{"chunking.semanticUnitMax", b.SemanticUnitMax, 1, b.SemanticMax, "", "chunking.semanticMax"},
+		{"indexing.workers", n.Workers, 1, 64, "", ""},
+		{"indexing.semanticWorkers", n.SemanticWorkers, 1, n.Workers, "", "indexing.workers"},
+		{"indexing.embeddingWorkers", n.EmbeddingWorkers, 1, 64, "", ""},
+		{"indexing.embeddingBatchSize", n.EmbeddingBatchSize, 1, 256, "", ""},
+		{"topK", c.TopK, 1, math.MaxInt, "", ""},
+		{"candidateTopK", c.CandidateTopK, c.TopK, 200, "topK", ""},
+		{"httpTimeoutMs", c.HTTPTimeoutMs, 1000, 600000, "", ""},
+		{"httpMaxRetries", c.HTTPMaxRetries, 0, 8, "", ""},
+	} {
+		if err := l.check(); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// EnvName matches an environment variable name.
+var EnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// limit bounds an integer setting to [lo, hi]. loName or hiName names the
+// setting a bound comes from, so the error says which value to change.
+type limit struct {
+	name           string
+	v, lo, hi      int
+	loName, hiName string
+}
+
+func (l limit) check() error {
+	side, bound, by := "least", l.lo, l.loName
+	if l.v >= l.lo {
+		if l.v <= l.hi {
+			return nil
+		}
+		side, bound, by = "most", l.hi, l.hiName
+	}
+	if by != "" {
+		return fmt.Errorf("%s (%d) must be at %s %s (%d)", l.name, l.v, side, by, bound)
+	}
+	return fmt.Errorf("%s (%d) must be at %s %d", l.name, l.v, side, bound)
 }
