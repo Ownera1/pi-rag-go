@@ -99,7 +99,7 @@ func TestNewFormatsIndexQueryRefreshAndProvenance(t *testing.T) {
 			if err != nil || r.Indexed != 1 || r.Failed != 0 {
 				t.Fatalf("refresh=%+v err=%v", r, err)
 			}
-			listed, err := c.ListDocuments(ctx)
+			listed, err := c.Documents(ctx)
 			if err != nil || len(listed) != 6 {
 				t.Fatalf("refresh changed canonical documents: %v err=%v", listed, err)
 			}

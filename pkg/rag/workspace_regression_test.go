@@ -266,8 +266,8 @@ func TestCanonicalArtifactRemovalRetiresOldRepresentationOnPartialFailure(t *tes
 	if err != nil || len(q.Hits) != 0 {
 		t.Fatalf("duplicate artifact: %+v %v", q, err)
 	}
-	files, err := c.ListDocuments(context.Background())
-	if err != nil || len(files) != 1 || files[0] != docPath(c, "paper/full.md") {
+	files, err := c.Documents(context.Background())
+	if err != nil || len(files) != 1 || files[0].Path != docPath(c, "paper/full.md") {
 		t.Fatalf("canonical paths: %v %v", files, err)
 	}
 }
@@ -325,7 +325,7 @@ func TestSymlinkedDocumentsRootKeepsIndex(t *testing.T) {
 	if r, err := c.Sync(context.Background()); err != nil || r.Removed != 0 || r.Indexed != 0 {
 		t.Fatalf("%+v %v", r, err)
 	}
-	if list, err := c.ListDocuments(context.Background()); err != nil || len(list) != 1 || list[0] != docPath(c, "note.txt") {
+	if list, err := c.Documents(context.Background()); err != nil || len(list) != 1 || list[0].Path != docPath(c, "note.txt") {
 		t.Fatalf("%+v %v", list, err)
 	}
 }
@@ -342,7 +342,7 @@ func TestPackageAtDocumentsRootFailsClosed(t *testing.T) {
 	if r, err := c.Sync(context.Background()); err == nil || r.Removed != 0 || !strings.Contains(r.Failures[0].Error, "own folder") {
 		t.Fatalf("%+v %v", r, err)
 	}
-	if list, err := c.ListDocuments(context.Background()); err != nil || len(list) != 2 {
+	if list, err := c.Documents(context.Background()); err != nil || len(list) != 2 {
 		t.Fatalf("%+v %v", list, err)
 	}
 }

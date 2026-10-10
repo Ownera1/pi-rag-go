@@ -118,61 +118,22 @@ CREATE TABLE IF NOT EXISTS files (
     size INTEGER NOT NULL,
     embedded INTEGER NOT NULL DEFAULT 0,
     document_id TEXT,
-    title TEXT
+    title TEXT,
+    document_key TEXT NOT NULL DEFAULT '',
+    source_path TEXT NOT NULL DEFAULT '',
+    zotero_ref TEXT NOT NULL DEFAULT '',
+    doi TEXT NOT NULL DEFAULT '',
+    format TEXT NOT NULL DEFAULT '',
+    parser_version TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_file_path ON chunks(file_path);
 `, dim)
 	_, err := d.SQL.Exec(schema)
-	if err == nil {
-		err = d.ensureDocumentColumns()
-	}
 	return err
 }
 
-func (d *DB) documentColumns() (map[string]bool, error) {
-	rows, err := d.SQL.Query("PRAGMA table_info(files)")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]bool{}
-	for rows.Next() {
-		var cid, notnull, pk int
-		var name, kind string
-		var def any
-		if err = rows.Scan(&cid, &name, &kind, &notnull, &def, &pk); err != nil {
-			return nil, err
-		}
-		out[name] = true
-	}
-	return out, rows.Err()
-}
-
-func (d *DB) ensureDocumentColumns() error {
-	cols, err := d.documentColumns()
-	if err != nil {
-		return err
-	}
-	for _, name := range []string{"document_key", "source_path", "zotero_ref", "doi", "format", "parser_version"} {
-		if !cols[name] {
-			if _, err = d.SQL.Exec("ALTER TABLE files ADD COLUMN " + name + " TEXT NOT NULL DEFAULT ''"); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func (d *DB) Documents(ctx context.Context) ([]model.CatalogDocument, error) {
-	cols, err := d.documentColumns()
-	if err != nil {
-		return nil, err
-	}
-	q := "SELECT path,COALESCE(title,''),'' AS document_key,'' AS source_path,'' AS zotero_ref,'' AS doi,COALESCE(document_id,''),hash FROM files"
-	if cols["document_key"] && cols["source_path"] && cols["zotero_ref"] && cols["doi"] {
-		q = "SELECT path,COALESCE(title,''),document_key,source_path,zotero_ref,doi,COALESCE(document_id,''),hash FROM files"
-	}
-	rows, err := d.SQL.QueryContext(ctx, q+" ORDER BY path")
+	rows, err := d.SQL.QueryContext(ctx, "SELECT path,COALESCE(title,''),document_key,source_path,zotero_ref,doi,COALESCE(document_id,''),hash FROM files ORDER BY path")
 	if err != nil {
 		return nil, err
 	}
@@ -188,9 +149,6 @@ func (d *DB) Documents(ctx context.Context) ([]model.CatalogDocument, error) {
 			if err = json.Unmarshal([]byte(ref), &v.Zotero); err != nil {
 				return nil, err
 			}
-		}
-		if v.Key == "" {
-			v.Key = "path:" + v.Path
 		}
 		out = append(out, v)
 	}
@@ -235,11 +193,6 @@ func (d *DB) GetMetadata(ctx context.Context, key string) (string, error) {
 		return "", nil
 	}
 	return v, e
-}
-
-func (d *DB) SetMetadata(ctx context.Context, key, value string) error {
-	_, e := d.SQL.ExecContext(ctx, "INSERT OR REPLACE INTO metadata(key,value) VALUES(?,?)", key, value)
-	return e
 }
 
 // HasChunks reports whether the index holds any chunk, without the full
@@ -432,21 +385,6 @@ ON CONFLICT(path) DO UPDATE SET
 	return tx.Commit()
 }
 
-// Hydrate bibliographic identity on a pre-feature index without embedding again.
-// The caller must prove the source still matches the indexed content hash.
-func (d *DB) SetDocumentIdentity(ctx context.Context, doc model.Document) error {
-	ref := ""
-	if doc.Zotero != nil {
-		b, err := json.Marshal(doc.Zotero)
-		if err != nil {
-			return err
-		}
-		ref = string(b)
-	}
-	_, err := d.SQL.ExecContext(ctx, "UPDATE files SET document_key=?,source_path=?,zotero_ref=?,doi=? WHERE path=? AND hash=?", doc.DocumentKey, doc.SourcePath, ref, doc.DOI, doc.Path, doc.Hash)
-	return err
-}
-
 func (d *DB) Delete(ctx context.Context, path string) error {
 	if d.ReadOnly {
 		return errors.New("read-only store")
@@ -601,15 +539,7 @@ DELETE FROM temp.allowed_documents; DELETE FROM temp.allowed_chunks;`); err != n
 			return err
 		}
 	}
-	cols, err := d.documentColumnsInTx(ctx, tx)
-	if err != nil {
-		return err
-	}
-	identity := "'path:'||f.path"
-	if cols {
-		identity = "CASE WHEN f.document_key='' THEN 'path:'||f.path ELSE f.document_key END"
-	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO temp.allowed_chunks SELECT c.rowid FROM chunks c JOIN files f ON f.path=c.file_path JOIN temp.allowed_documents a ON a.document_key="+identity)
+	_, err = tx.ExecContext(ctx, "INSERT INTO temp.allowed_chunks SELECT c.rowid FROM chunks c JOIN files f ON f.path=c.file_path JOIN temp.allowed_documents a ON a.document_key=f.document_key")
 	if err != nil {
 		return err
 	}
@@ -631,26 +561,6 @@ DELETE FROM temp.allowed_chunks;`); err != nil {
 	return err
 }
 
-func (d *DB) documentColumnsInTx(ctx context.Context, tx *sql.Tx) (bool, error) {
-	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(files)")
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	found := false
-	for rows.Next() {
-		var a, b, c, e, f any
-		var name string
-		if err = rows.Scan(&a, &name, &b, &c, &e, &f); err != nil {
-			return false, err
-		}
-		if name == "document_key" {
-			found = true
-		}
-	}
-	return found, rows.Err()
-}
-
 func (d *DB) Chunks(ctx context.Context, ids []int64) (map[int64]model.Chunk, error) {
 	out := map[int64]model.Chunk{}
 	if len(ids) == 0 {
@@ -662,22 +572,10 @@ func (d *DB) Chunks(ctx context.Context, ids []int64) (map[int64]model.Chunk, er
 		args[i] = id
 		placeholders[i] = "?"
 	}
-	cols, err := d.documentColumns()
-	if err != nil {
-		return nil, err
-	}
-	// Readers tolerate a store written before these columns existed.
-	field := func(name string) string {
-		if cols[name] {
-			return "COALESCE(f." + name + ",'')"
-		}
-		return "''"
-	}
-	columns := `chunks.rowid, chunks.id, file_path, chunk_content, line_start, line_end,
-        chunk_hash, indexed_at, tokens, page_start, page_end, section, chunk_index`
-	columns += ", " + field("source_path") + ", COALESCE(f.title,''), " + field("format") + ", " + field("parser_version")
-	join := " LEFT JOIN files f ON f.path=chunks.file_path"
-	q := "SELECT " + columns + " FROM chunks" + join + " WHERE chunks.rowid IN (" + strings.Join(placeholders, ",") + ")"
+	q := `SELECT chunks.rowid, chunks.id, file_path, chunk_content, line_start, line_end,
+        chunk_hash, indexed_at, tokens, page_start, page_end, section, chunk_index,
+        COALESCE(f.source_path,''), COALESCE(f.title,''), COALESCE(f.format,''), COALESCE(f.parser_version,'')
+FROM chunks LEFT JOIN files f ON f.path=chunks.file_path WHERE chunks.rowid IN (` + strings.Join(placeholders, ",") + ")"
 	rows, e := d.SQL.QueryContext(ctx, q, args...)
 	if e != nil {
 		return nil, e
@@ -689,12 +587,11 @@ func (d *DB) Chunks(ctx context.Context, ids []int64) (map[int64]model.Chunk, er
 		var indexed string
 		var pageA, pageB sql.NullInt64
 		var sec sql.NullString
-		dest := []any{
+		if e = rows.Scan(
 			&id, &c.ID, &c.Path, &c.Content, &c.LineStart, &c.LineEnd, &c.Hash,
 			&indexed, &c.Tokens, &pageA, &pageB, &sec, &c.ChunkIndex,
-		}
-		dest = append(dest, &c.SourcePath, &c.Title, &c.Format, &c.ParserVersion)
-		if e = rows.Scan(dest...); e != nil {
+			&c.SourcePath, &c.Title, &c.Format, &c.ParserVersion,
+		); e != nil {
 			return nil, e
 		}
 		if pageA.Valid {

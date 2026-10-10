@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/Ownera1/rag-go/internal/catalog"
 	"github.com/Ownera1/rag-go/internal/document"
@@ -20,37 +19,6 @@ type MetadataFilter = model.MetadataFilter
 type ZoteroSyncResult = model.ZoteroSyncResult
 type ZoteroStatus = model.ZoteroStatus
 type ZoteroMatchResult = catalog.MatchResult
-
-func (s *session) documentReferences(ctx context.Context) ([]model.CatalogDocument, error) {
-	docs, err := s.db.Documents(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for i, v := range docs {
-		if !strings.HasPrefix(v.Key, "path:") {
-			continue
-		}
-		if err = ctx.Err(); err != nil {
-			return nil, err
-		}
-		parsed, e := document.Parse(ctx, v.Path)
-		if e != nil {
-			continue
-		}
-		hash, _, e := s.db.FileHash(ctx, v.Path)
-		if e != nil {
-			return nil, e
-		}
-		if hash != parsed.Hash {
-			continue
-		}
-		if err = s.db.SetDocumentIdentity(ctx, parsed); err != nil {
-			return nil, err
-		}
-		docs[i] = model.CatalogDocument{Key: parsed.DocumentKey, Path: parsed.Path, SourcePath: parsed.SourcePath, Title: parsed.Title, Zotero: parsed.Zotero, DOI: parsed.DOI}
-	}
-	return docs, nil
-}
 
 func (s *session) openCatalog(write bool) (*catalog.DB, error) {
 	if s.bibliography != nil {
@@ -124,7 +92,7 @@ func (c *Core) SyncZotero(ctx context.Context, override *ZoteroConfig) (ZoteroSy
 		return r, err
 	}
 	if s.db != nil {
-		docs, e := s.documentReferences(ctx)
+		docs, e := s.db.Documents(ctx)
 		if e != nil {
 			return r, e
 		}
@@ -168,7 +136,7 @@ func (s *session) reconcileZotero(ctx context.Context, includeCandidates ...bool
 	if err != nil {
 		return ZoteroMatchResult{}, err
 	}
-	docs, err := s.documentReferences(ctx)
+	docs, err := s.db.Documents(ctx)
 	if err != nil {
 		return ZoteroMatchResult{}, err
 	}
@@ -198,7 +166,7 @@ func (c *Core) MatchZotero(ctx context.Context, overrides ...*ZoteroConfig) (Zot
 		if s.db == nil {
 			return ZoteroMatchResult{Candidates: []catalog.Candidate{}}, nil
 		}
-		docs, e := s.documentReferences(ctx)
+		docs, e := s.db.Documents(ctx)
 		if e != nil {
 			return ZoteroMatchResult{}, e
 		}
@@ -247,7 +215,7 @@ func (c *Core) LinkZotero(ctx context.Context, path string, ref ZoteroReference,
 	}
 	var doc model.CatalogDocument
 	if s.db != nil {
-		docs, e := s.documentReferences(ctx)
+		docs, e := s.db.Documents(ctx)
 		if e != nil {
 			return nil, e
 		}

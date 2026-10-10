@@ -425,27 +425,25 @@ var codexTable = regexp.MustCompile(`^\s*\[\s*mcp_servers\s*\.\s*(?:rag-go|"rag-
 
 // withoutCodexServer drops rag-go's tables line by line, so comments and
 // formatting elsewhere in the user's configuration survive.
-func withoutCodexServer(text string) (string, bool) {
+func withoutCodexServer(text string) string {
 	lines := strings.SplitAfter(text, "\n")
 	kept := make([]string, 0, len(lines))
-	dropping, dropped := false, false
+	dropping := false
 	for _, line := range lines {
 		if strings.HasPrefix(strings.TrimSpace(line), "[") {
 			dropping = codexTable.MatchString(line)
 		}
-		if dropping {
-			dropped = true
-			continue
+		if !dropping {
+			kept = append(kept, line)
 		}
-		kept = append(kept, line)
 	}
-	return strings.Join(kept, ""), dropped
+	return strings.Join(kept, "")
 }
 
 // withCodexServer replaces rag-go's tables with one stdio entry, keeping the
 // rest of the file byte for byte.
 func withCodexServer(original []byte, exe string, launch []string) ([]byte, error) {
-	text, _ := withoutCodexServer(string(original))
+	text := withoutCodexServer(string(original))
 	if text = strings.TrimRight(text, "\n"); text != "" {
 		text += "\n\n"
 	}
@@ -532,7 +530,7 @@ func unregisterCodex(h host) (string, error) {
 	if _, exists := servers["rag-go"]; !exists {
 		return "not registered", nil
 	}
-	text, _ := withoutCodexServer(string(original))
+	text := withoutCodexServer(string(original))
 	// Drop the blank separator that install added before the table.
 	if text = strings.TrimRight(text, "\n"); text != "" {
 		text += "\n"
