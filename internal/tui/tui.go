@@ -119,6 +119,7 @@ type Model struct {
 	cursor       int
 	editing      bool
 	input        textinput.Model
+	pick         int // the highlighted entry of matches while typing
 	status       *rag.Status
 	task         string
 	cancel       context.CancelFunc
@@ -258,7 +259,22 @@ func (m *Model) apply(edit func(*model.Config) error) error {
 		return err
 	}
 	m.draft = next
+	m.msg = m.missingKey()
 	return nil
+}
+
+// missingKey warns when the draft points a provider somewhere new that has no
+// credential to send, which rag init asks for once the change is saved.
+func (m *Model) missingKey() string {
+	for _, p := range [][2]model.ProviderConfig{{m.draft.Embedding, m.saved.Embedding}, {m.draft.Reranker, m.saved.Reranker}} {
+		if p[0] == p[1] || p[0].Type == "none" || p[0].APIKeyEnv == "" {
+			continue
+		}
+		if key, err := workspace.Credential(m.core.WorkspaceDir(), p[0]); err == nil && key == "" {
+			return warn.Render("工作区没有 " + p[0].APIKeyEnv + "，查询会失败；保存后在终端运行 rag init 存入")
+		}
+	}
+	return ""
 }
 
 // save writes cfg under the workspace write lock, refusing when the file no
@@ -365,9 +381,20 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.editing {
 		switch k.String() {
+		case "up":
+			if n := len(m.matches()); n > 0 {
+				m.pick = (m.pick + n - 1) % n
+			}
+		case "down":
+			if n := len(m.matches()); n > 0 {
+				m.pick = (m.pick + 1) % n
+			}
 		case "enter":
-			f := m.fields[m.cursor]
-			if err := m.apply(func(c *model.Config) error { return f.set(c, m.input.Value()) }); err != nil {
+			f, v := m.fields[m.cursor], m.input.Value()
+			if c := m.matches(); len(c) > 0 {
+				v = c[min(m.pick, len(c)-1)]
+			}
+			if err := m.apply(func(c *model.Config) error { return f.set(c, v) }); err != nil {
 				m.msg = bad.Render(err.Error())
 				return m, nil
 			}
@@ -379,6 +406,7 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		default:
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(k)
+			m.pick = 0
 			return m, cmd
 		}
 		return m, nil
@@ -439,13 +467,26 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		m.editing = true
-		m.input.SetValue(m.fields[m.cursor].get(m.draft))
+		// A field with choices starts empty to search them; enter on
+		// nothing typed keeps the current value.
+		f := m.fields[m.cursor]
+		m.editing, m.pick, m.input.Placeholder = true, 0, ""
+		m.input.SetValue(f.get(m.draft))
+		if f.offered(m.draft) != nil {
+			m.input.Placeholder = f.get(m.draft)
+			m.input.SetValue("")
+		}
 		m.input.CursorEnd()
 		return m, m.input.Focus()
 	case "u":
-		f := m.fields[m.cursor]
-		if err := m.apply(func(c *model.Config) error { return f.set(c, f.get(m.saved)) }); err != nil {
+		f, saved := m.fields[m.cursor], m.saved
+		if err := m.apply(func(c *model.Config) error {
+			if f.restore != nil {
+				f.restore(c, saved)
+				return nil
+			}
+			return f.set(c, f.get(saved))
+		}); err != nil {
 			m.msg = bad.Render(err.Error())
 		}
 	case "esc":
@@ -714,6 +755,11 @@ func (m *Model) fieldLines(w, room int) []string {
 		case cur == "":
 			value = muted.Render(shown)
 		}
+		if !(m.editing && i == m.cursor) {
+			if c := f.offered(m.draft); slices.Contains(c, cur) {
+				value += muted.Render(fmt.Sprintf(" %d/%d", slices.Index(c, cur)+1, len(c)))
+			}
+		}
 		name := fit(f.name, nameW-1)
 		if i == m.cursor {
 			name = accent.Bold(true).Render(name)
@@ -722,10 +768,41 @@ func (m *Model) fieldLines(w, room int) []string {
 		name = lipgloss.NewStyle().Width(nameW).Render(name)
 		value = lipgloss.NewStyle().Width(valueW).Render(fit(value, valueW-1))
 		lines = append(lines, mark(i == m.cursor)+name+value+tags[f.impact].Render(impactLabel[f.impact]))
+		if i == m.cursor {
+			lines = append(lines, m.matchLines(nameW, valueW)...)
+		}
 	}
 	if room >= 0 && len(lines) > room {
-		start := min(max(0, at-room/2), len(lines)-room)
+		// Center the cursor, but show the matches below it when they fit.
+		end := at + 1 + len(m.matches())
+		start := min(max(0, at-room/2, end-room), at, len(lines)-room)
 		lines = lines[start : start+room]
+	}
+	return lines
+}
+
+// matchLines renders the matches under the field being typed, the picked one
+// highlighted, with the typed text underlined in each.
+func (m *Model) matchLines(nameW, valueW int) []string {
+	q := strings.ToLower(strings.TrimSpace(m.input.Value()))
+	matches := m.matches()
+	var lines []string
+	for i, c := range matches {
+		style, lead := lipgloss.NewStyle(), "  "
+		if i == m.pick {
+			style, lead = accent, accent.Render("> ")
+		}
+		s := style.Render(c)
+		// Byte offsets of the lowercased name hold only when lowercasing kept
+		// its length, as for the ASCII model names.
+		if j := strings.Index(strings.ToLower(c), q); q != "" && j >= 0 && len(strings.ToLower(c)) == len(c) {
+			s = style.Render(c[:j]) + style.Underline(true).Render(c[j:j+len(q)]) + style.Render(c[j+len(q):])
+		}
+		if q != "" && i == len(matches)-1 && !slices.Contains(m.fields[m.cursor].offered(m.draft), c) {
+			s += muted.Render(" 按原文写入")
+		}
+		// Matches carry no tag, so they may use its column.
+		lines = append(lines, strings.Repeat(" ", 3+nameW)+fit(lead+s, valueW+tagW-1))
 	}
 	return lines
 }
@@ -785,6 +862,8 @@ func (m *Model) footerLines(w int) (lines, help []string) {
 	switch {
 	case m.task != "":
 		help = keys(w, "", "esc", "取消", "tab", "切换页签", "ctrl+c", "退出")
+	case m.matches() != nil:
+		help = keys(w, "", "上下", "选择候选", "enter", "选中", "esc", "取消")
 	case m.page == pageList:
 		help = keys(w, "", "上下", "选择", "enter", "打开", "s", "sync", "S", "全部 sync", "r", "刷新", "tab", "设置", "q", "退出")
 	case m.fullHelp:
