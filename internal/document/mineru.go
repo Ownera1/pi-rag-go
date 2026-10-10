@@ -186,7 +186,7 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 		return nil, errors.New("trailing MinerU JSON")
 	}
 	blocks := []model.Block{}
-	levels := map[int]string{}
+	levels := headings{}
 	add := func(item map[string]any, page *int) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -297,19 +297,10 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 		} else {
 			value = normalize(value)
 		}
-		headings := func() []string {
-			path := []string{}
-			for l := 1; l <= 6; l++ {
-				if title := levels[l]; title != "" {
-					path = append(path, title)
-				}
-			}
-			return path
-		}
 		if value == "" {
 			// A captionless figure, often one panel of a group, stays with
 			// the text before it; author photos after the references do not.
-			if image != "" && len(blocks) > 0 && !inReferences(headings()) {
+			if image != "" && len(blocks) > 0 && !inReferences(levels.path()) {
 				blocks[len(blocks)-1].Images = append(blocks[len(blocks)-1].Images, image)
 			}
 			return nil
@@ -321,14 +312,9 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 			return errors.New("MinerU heading level exceeds 6")
 		}
 		if level > 0 {
-			for l := range levels {
-				if l >= level {
-					delete(levels, l)
-				}
-			}
-			levels[level] = value
+			levels.open(level, value)
 		}
-		path := headings()
+		path := levels.path()
 		if inReferences(path) {
 			return nil
 		}

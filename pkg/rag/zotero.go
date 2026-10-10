@@ -9,6 +9,7 @@ import (
 	"github.com/Ownera1/rag-go/internal/catalog"
 	"github.com/Ownera1/rag-go/internal/document"
 	"github.com/Ownera1/rag-go/internal/model"
+	"github.com/Ownera1/rag-go/internal/workspace"
 	"github.com/Ownera1/rag-go/internal/zotero"
 )
 
@@ -189,7 +190,7 @@ func (c *Core) LinkZotero(ctx context.Context, path string, ref ZoteroReference,
 		return nil, err
 	}
 	if writeManifest {
-		if filepath.Base(path) != "rag-source.json" || !within(s.docs, path) {
+		if filepath.Base(path) != "rag-source.json" || !workspace.Within(s.docs, path) {
 			return nil, errors.New("--write-manifest requires a rag-source.json inside documents")
 		}
 		// Symlinked ancestors such as macOS /var or /tmp are fine; the manifest
@@ -206,7 +207,7 @@ func (c *Core) LinkZotero(ctx context.Context, path string, ref ZoteroReference,
 		if e != nil {
 			return nil, e
 		}
-		if !within(root, real) || st.Mode()&os.ModeSymlink != 0 {
+		if !workspace.Within(root, real) || st.Mode()&os.ModeSymlink != 0 {
 			return nil, errors.New("cannot write an external or symlinked manifest")
 		}
 		if _, e = document.Parse(ctx, path); e != nil {

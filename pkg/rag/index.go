@@ -68,7 +68,7 @@ func scan(ctx context.Context, root string, patterns []string, ignoredRoots ...s
 	}
 	for _, ignored := range ignoredRoots {
 		resolved, _ := filepath.EvalSymlinks(ignored)
-		if within(ignored, root) || resolved != "" && within(resolved, real) {
+		if workspace.Within(ignored, root) || resolved != "" && workspace.Within(resolved, real) {
 			return nil, fmt.Errorf("store contents cannot be tracked: %s", root)
 		}
 	}
@@ -100,7 +100,7 @@ func scan(ctx context.Context, root string, patterns []string, ignoredRoots ...s
 		}
 		p = filepath.Join(root, rel)
 		for _, ignored := range ignoredRoots {
-			if within(ignored, p) {
+			if workspace.Within(ignored, p) {
 				if d.IsDir() {
 					return filepath.SkipDir
 				}

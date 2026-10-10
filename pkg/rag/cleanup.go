@@ -200,13 +200,8 @@ func knownDB(path string) bool {
 	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
 		return false
 	}
-	db, err := store.Open(path, true, 0)
-	if err != nil {
-		return false
-	}
-	defer db.Close()
-	version, err := db.GetMetadata(context.Background(), "go_storage_version")
-	return err == nil && version == "1"
+	ok, err := store.Recognized(context.Background(), path)
+	return err == nil && ok
 }
 
 // dbDir reports whether path is a real directory holding rag.db and nothing

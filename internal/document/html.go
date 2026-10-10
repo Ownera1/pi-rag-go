@@ -103,16 +103,8 @@ func parseHTML(ctx context.Context, b []byte) ([]model.Block, error) {
 		root = body
 	}
 	blocks := []model.Block{}
-	levels := map[int]string{}
-	current := func() *string {
-		path := []string{}
-		for l := 1; l <= 6; l++ {
-			if s := levels[l]; s != "" {
-				path = append(path, s)
-			}
-		}
-		return section(path)
-	}
+	levels := headings{}
+	current := func() *string { return section(levels.path()) }
 	var walk func(*html.Node) error
 	walk = func(n *html.Node) error {
 		if err := ctx.Err(); err != nil {
@@ -123,12 +115,7 @@ func parseHTML(ctx context.Context, b []byte) ([]model.Block, error) {
 		}
 		if n.Type == html.ElementNode && len(n.Data) == 2 && n.Data[0] == 'h' && n.Data[1] >= '1' && n.Data[1] <= '6' {
 			level := int(n.Data[1] - '0')
-			for l := range levels {
-				if l >= level {
-					delete(levels, l)
-				}
-			}
-			levels[level] = normalize(inlineHTML(n))
+			levels.open(level, normalize(inlineHTML(n)))
 			return nil
 		}
 		switch n.Data {

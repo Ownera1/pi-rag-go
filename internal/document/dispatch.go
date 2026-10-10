@@ -56,69 +56,59 @@ func readFile(path string) ([]byte, error) {
 	return b, nil
 }
 
+// inputFiles lists the files Parse reads besides fixes: path, then a
+// manifest's content and page source or a MinerU export's page source.
+func inputFiles(path string) ([]string, error) {
+	files := []string{path}
+	if filepath.Base(path) == "rag-source.json" {
+		b, err := readFile(path)
+		if err != nil {
+			return nil, err
+		}
+		var m Manifest
+		if err = json.Unmarshal(b, &m); err != nil {
+			return nil, err
+		}
+		inputs, err := manifestInputs(filepath.Dir(path), m)
+		return append(files, inputs...), err
+	}
+	if src := minerUPages(path); src != "" {
+		files = append(files, src)
+	}
+	return files, nil
+}
+
 // InputFingerprint hashes exactly the bytes Parse consumes, without parsing body
 // structure. Manifest metadata and canonical content both participate.
 func InputFingerprint(ctx context.Context, path string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	b, err := readFile(path)
+	files, err := inputFiles(path)
 	if err != nil {
 		return "", err
 	}
-	hash := ShortHash(string(b))
-	if filepath.Base(path) == "rag-source.json" {
-		var m Manifest
-		if err = json.Unmarshal(b, &m); err != nil {
-			return hash, err
-		}
-		files, err := manifestInputs(filepath.Dir(path), m)
+	parts := make([]string, len(files))
+	for i, f := range files {
+		b, err := readFile(f)
 		if err != nil {
-			return hash, err
+			return "", err
 		}
-		parts := []string{string(b)}
-		for _, f := range files {
-			data, err := readFile(f)
-			if err != nil {
-				return hash, err
-			}
-			parts = append(parts, string(data))
-		}
-		hash = ShortHash(strings.Join(parts, "\x00"))
-	} else if src := minerUPages(path); src != "" {
-		data, err := readFile(src)
-		if err != nil {
-			return hash, err
-		}
-		hash = ShortHash(string(b) + "\x00" + string(data))
+		parts[i] = string(b)
 	}
 	fix, err := fixes(path)
 	if err != nil {
-		return hash, err
+		return "", err
 	}
-	return withFixes(hash, fix), ctx.Err()
+	return withFixes(ShortHash(strings.Join(parts, "\x00")), fix), ctx.Err()
 }
 
 // InputStamp identifies the files InputFingerprint reads by metadata alone and
 // returns their newest modification time. A manifest is read to find content.
 func InputStamp(path string) (string, time.Time, error) {
-	files := []string{path}
-	if filepath.Base(path) == "rag-source.json" {
-		b, err := readFile(path)
-		if err != nil {
-			return "", time.Time{}, err
-		}
-		var m Manifest
-		if err = json.Unmarshal(b, &m); err != nil {
-			return "", time.Time{}, err
-		}
-		inputs, err := manifestInputs(filepath.Dir(path), m)
-		if err != nil {
-			return "", time.Time{}, err
-		}
-		files = append(files, inputs...)
-	} else if src := minerUPages(path); src != "" {
-		files = append(files, src)
+	files, err := inputFiles(path)
+	if err != nil {
+		return "", time.Time{}, err
 	}
 	if hasFixes(path) {
 		files = append(files, filepath.Join(filepath.Dir(path), FixesFile))
@@ -479,8 +469,7 @@ func localContent(root, relative string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	rel, err := filepath.Rel(realRoot, realPath)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !workspace.Within(realRoot, realPath) {
 		return "", errors.New("contentPath escapes document directory")
 	}
 	if filepath.Base(realPath) == "rag-source.json" {
