@@ -8,6 +8,9 @@ import (
 	"strconv"
 )
 
+// ZoteroKey matches a Zotero item or attachment key.
+var ZoteroKey = regexp.MustCompile(`^[A-Z0-9]{8}$`)
+
 func (r ZoteroReference) Validate() error {
 	if r.LibraryType != "user" && r.LibraryType != "group" {
 		return errors.New("invalid Zotero reference libraryType")
@@ -16,8 +19,7 @@ func (r ZoteroReference) Validate() error {
 	if err != nil || (r.LibraryType == "group" && n == 0) {
 		return errors.New("invalid Zotero reference libraryId")
 	}
-	valid := regexp.MustCompile(`^[A-Z0-9]{8}$`)
-	if !valid.MatchString(r.ItemKey) || (r.AttachmentKey != "" && !valid.MatchString(r.AttachmentKey)) {
+	if !ZoteroKey.MatchString(r.ItemKey) || (r.AttachmentKey != "" && !ZoteroKey.MatchString(r.AttachmentKey)) {
 		return errors.New("invalid Zotero reference item key")
 	}
 	return nil

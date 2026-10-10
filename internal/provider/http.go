@@ -27,6 +27,17 @@ type HTTP struct {
 	batchSize  int
 }
 
+// StatusError is an endpoint's non-2xx response.
+type StatusError struct {
+	Code    int
+	Message string
+}
+
+func (e *StatusError) Error() string { return fmt.Sprintf("model HTTP %d: %s", e.Code, e.Message) }
+
+// Transient reports a rate limit or server error, which a retry may clear.
+func (e *StatusError) Transient() bool { return e.Code == 429 || e.Code >= 500 }
+
 func NewHTTP(cfg model.ProviderConfig, timeoutMs, retries int, batchSizes ...int) (*HTTP, error) {
 	if cfg.Type != "voyage" && cfg.Type != "openai" && cfg.Type != "http" && cfg.Type != "dashscope" {
 		return nil, fmt.Errorf("unsupported protocol %q", cfg.Type)
@@ -104,8 +115,8 @@ func (p *HTTP) call(ctx context.Context, method, path string, body any, out any)
 				if p.credential != "" {
 					message = strings.ReplaceAll(message, p.credential, "[redacted]")
 				}
-				err = fmt.Errorf("model HTTP %d: %s", res.StatusCode, message[:min(len(message), 200)])
-				retry = res.StatusCode == 429 || res.StatusCode >= 500
+				status := &StatusError{Code: res.StatusCode, Message: message[:min(len(message), 200)]}
+				err, retry = status, status.Transient()
 			} else {
 				return json.Unmarshal(raw, out)
 			}

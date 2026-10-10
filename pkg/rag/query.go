@@ -14,6 +14,7 @@ import (
 
 	"github.com/Ownera1/rag-go/internal/chunk"
 	"github.com/Ownera1/rag-go/internal/model"
+	"github.com/Ownera1/rag-go/internal/provider"
 	"github.com/Ownera1/rag-go/internal/searchtext"
 	"github.com/Ownera1/rag-go/internal/store"
 )
@@ -73,17 +74,15 @@ func transient(err error) bool {
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
-	var ne net.Error
-	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
-		return true
+	var status *provider.StatusError
+	if errors.As(err, &status) {
+		return status.Transient()
 	}
-	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "model http 429") ||
-		strings.Contains(s, "model http 5") ||
-		strings.Contains(s, "timeout") ||
-		strings.Contains(s, "connection") ||
-		strings.Contains(s, "network") ||
-		strings.Contains(s, "no such host")
+	// A refused or reset connection or a failed lookup is a *net.OpError; a
+	// TLS or configuration error is not, and fails the query.
+	var ne net.Error
+	var op *net.OpError
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ne) && ne.Timeout() || errors.As(err, &op)
 }
 
 func (c *session) query(ctx context.Context, query string, opts QueryOptions, plan queryPlan) (out QueryResult, err error) {

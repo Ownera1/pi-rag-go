@@ -24,10 +24,9 @@ import (
 	"github.com/Ownera1/rag-go/internal/model"
 )
 
-var keyPattern = regexp.MustCompile(`^[A-Z0-9]{8}$`)
 var yearPattern = regexp.MustCompile(`(?:^|\D)([12][0-9]{3})(?:\D|$)`)
 
-func ValidKey(key string) bool { return keyPattern.MatchString(key) }
+func ValidKey(key string) bool { return model.ZoteroKey.MatchString(key) }
 
 func NormalizeDOI(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))

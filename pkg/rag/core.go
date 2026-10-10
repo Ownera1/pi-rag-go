@@ -419,8 +419,11 @@ func (c *Core) Query(ctx context.Context, text string, opts QueryOptions) (out Q
 	if ctx.Err() != nil {
 		return out, ctx.Err()
 	}
-	if err = s.compatible(ctx, s.db); err != nil {
-		return out, err
+	// A sync reopened the session; without one the check above still holds.
+	if synced != nil {
+		if err = s.compatible(ctx, s.db); err != nil {
+			return out, err
+		}
 	}
 	if syncError != "" {
 		if s.db == nil {
