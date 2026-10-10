@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -200,7 +201,12 @@ func TestViewFitsTerminal(t *testing.T) {
 	states := map[string]func(){
 		"message": func() {},
 		"pending": func() { m.msg = "" },
-		"editing": func() { m.cursor = 24; press(t, m, "\r") },
+		"editing": func() { at(m, "documents"); press(t, m, "\r") },
+		"searching": func() {
+			press(t, m, "\x1b")
+			at(m, "embedding.model")
+			press(t, m, "\r", "voyage")
+		},
 		"progress": func() {
 			press(t, m, "\x1b")
 			m.task, m.prog = "rebuild", rag.IndexProgress{Done: 37, Total: 214, Path: strings.Repeat("长文件名", 20) + ".pdf", Result: rag.IndexResult{Chunks: 1204}}
@@ -214,7 +220,7 @@ func TestViewFitsTerminal(t *testing.T) {
 		},
 		"list end": func() { m.task, m.runTotal = "", 0; m.at = 1 },
 	}
-	for _, name := range []string{"message", "pending", "editing", "progress", "help", "list", "list run", "list end"} {
+	for _, name := range []string{"message", "pending", "editing", "searching", "progress", "help", "list", "list run", "list end"} {
 		states[name]()
 		for _, size := range [][2]int{{40, 14}, {66, 24}, {80, 30}, {120, 50}, {240, 80}} {
 			m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
@@ -234,6 +240,9 @@ func TestViewFitsTerminal(t *testing.T) {
 			}
 			if !onScreen(m.View()) && !m.editing {
 				t.Errorf("%s %v: cursor scrolled off", name, size)
+			}
+			if name == "searching" && (!onScreen(m.View()) || !strings.Contains(m.View(), "voyage-4-lite")) {
+				t.Errorf("%s %v: field or first match scrolled off", name, size)
 			}
 		}
 	}
@@ -264,6 +273,11 @@ func TestSaveWritesDraftAndRefusesOutsideEdit(t *testing.T) {
 	}
 }
 
+// at moves the cursor to the field named name.
+func at(m *Model, name string) {
+	m.cursor = slices.IndexFunc(m.fields, func(f field) bool { return f.name == name })
+}
+
 // The draft stays a valid configuration: a field with options takes no typed
 // value, and an edit that breaks a limit is refused with the limit named.
 func TestEditsKeepDraftValid(t *testing.T) {
@@ -272,19 +286,12 @@ func TestEditsKeepDraftValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	at := func(name string) {
-		for i, f := range m.fields {
-			if f.name == name {
-				m.cursor = i
-			}
-		}
-	}
-	at("reranker.type")
+	at(m, "reranker.type")
 	press(t, m, "\r")
 	if m.editing || m.draft.Reranker.Type != "voyage" {
 		t.Fatalf("enter on options: editing %v type %q", m.editing, m.draft.Reranker.Type)
 	}
-	at("topK")
+	at(m, "topK")
 	for value, want := range map[string]string{"0": "topK (0) must be at least 1", "abc": "topK must be an integer"} {
 		press(t, m, "\r")
 		m.input.SetValue(value)
@@ -294,7 +301,7 @@ func TestEditsKeepDraftValid(t *testing.T) {
 		}
 		press(t, m, "\x1b")
 	}
-	at("candidateTopK")
+	at(m, "candidateTopK")
 	press(t, m, "h", "h", "h", "h", "h", "h")
 	if m.draft.CandidateTopK != 5 || !strings.Contains(ansi.Strip(m.msg), "candidateTopK (0) must be at least topK (5)") {
 		t.Fatalf("stepped past topK: %d %q", m.draft.CandidateTopK, m.msg)
@@ -355,5 +362,76 @@ func TestListSyncsAllAndOpensWorkspaces(t *testing.T) {
 	run(m, keyMsg("\r"))
 	if m.page != pageSettings || m.core.WorkspaceDir() != b.WorkspaceDir() || len(m.changed()) != 0 {
 		t.Fatalf("second enter did not open b: page %d changed %d", m.page, len(m.changed()))
+	}
+}
+
+// A provider preset sets the endpoint, credential name and model together and
+// offers its models; typing searches them, and any typed name stays enterable.
+func TestProviderPresetsAndModelSearch(t *testing.T) {
+	t.Setenv("RAG_GO_CONFIG_DIR", t.TempDir())
+	t.Setenv("DASHSCOPE_API_KEY", "")
+	core, _ := indexed(t)
+	m, err := New(context.Background(), core, open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at(m, "embedding.provider")
+	press(t, m, "right")
+	e := m.draft.Embedding
+	if e.Type != "openai" || e.Model != "qwen3.7-text-embedding" || e.Dimensions != 1024 || e.APIKeyEnv != "DASHSCOPE_API_KEY" || m.draft.Indexing.EmbeddingBatchSize != 10 {
+		t.Fatalf("dashscope preset: %+v batch %d", e, m.draft.Indexing.EmbeddingBatchSize)
+	}
+	if !strings.Contains(m.msg, "DASHSCOPE_API_KEY") {
+		t.Fatalf("no missing-key warning: %q", m.msg)
+	}
+	at(m, "embedding.model")
+	press(t, m, "right")
+	if m.draft.Embedding.Model != "text-embedding-v4" {
+		t.Fatalf("model choice: %q", m.draft.Embedding.Model)
+	}
+	at(m, "embedding.provider")
+	press(t, m, "u")
+	if m.draft.Embedding != m.saved.Embedding {
+		t.Fatalf("restore: %+v", m.draft.Embedding)
+	}
+
+	at(m, "reranker.provider")
+	press(t, m, "right") // none -> voyage
+	at(m, "reranker.model")
+	for _, c := range []struct {
+		typed string
+		downs int
+		want  string
+	}{
+		{"", 0, "rerank-3"},               // nothing typed keeps the current model
+		{"2.5-l", 0, "rerank-2.5-lite"},   // a hyphenated word
+		{"LITE", 1, "rerank-2.5-lite"},    // second of two, ignoring case
+		{"rerank-2", 2, "rerank-2"},       // the typed text after the matches
+		{"my-reranker", 0, "my-reranker"}, // no match
+	} {
+		press(t, m, "\r")
+		if c.typed != "" {
+			press(t, m, c.typed)
+		}
+		for range c.downs {
+			press(t, m, "down")
+		}
+		press(t, m, "\r")
+		if m.editing || m.draft.Reranker.Model != c.want {
+			t.Fatalf("typed %q: editing %v model %q", c.typed, m.editing, m.draft.Reranker.Model)
+		}
+	}
+
+	at(m, "reranker.baseUrl")
+	press(t, m, "\r")
+	m.input.SetValue("https://example.test/v1")
+	press(t, m, "\r")
+	at(m, "reranker.model")
+	if f := m.fields[m.cursor]; f.get(m.draft) == "" || f.offered(m.draft) != nil || m.fields[m.cursor-2].get(m.draft) != "custom" {
+		t.Fatalf("custom endpoint still offers preset models")
+	}
+	press(t, m, "\r")
+	if m.input.Value() != "my-reranker" || m.matches() != nil {
+		t.Fatalf("custom model input %q matches %v", m.input.Value(), m.matches())
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -24,31 +25,46 @@ var impactLabel = [...]string{"即时", "sync", "zotero", "rebuild"}
 
 // field is one editable configuration value. Fields with options cycle with
 // ←/→ and enter, fields with a step adjust numerically, and every other field
-// accepts typed input.
+// accepts typed input. Choices, which depend on the configuration, cycle with
+// ←/→ and are searched while typing.
 type field struct {
 	group, name string
 	impact      impact
 	options     []string
+	choices     func(model.Config) []string
 	step        float64
 	get         func(model.Config) string
 	set         func(*model.Config, string) error
+	// restore, when set, reverts the field to saved in place of setting its
+	// saved value, for fields that set more than they show.
+	restore func(c *model.Config, saved model.Config)
+}
+
+// offered returns the field's choices under c, nil when it has none.
+func (f field) offered(c model.Config) []string {
+	if f.choices == nil {
+		return nil
+	}
+	return f.choices(c)
 }
 
 func (f field) adjust(c *model.Config, dir int) error {
-	cur := f.get(*c)
-	if len(f.options) > 0 {
-		i := 0
-		for j, o := range f.options {
-			if o == cur {
-				i = j
-			}
+	options := f.options
+	if f.choices != nil {
+		options = f.choices(*c)
+	}
+	if len(options) > 0 {
+		// A value not among the options steps to the first or last one.
+		i := slices.Index(options, f.get(*c))
+		if i < 0 && dir < 0 {
+			i = 0
 		}
-		return f.set(c, f.options[(i+dir+len(f.options))%len(f.options)])
+		return f.set(c, options[(i+dir+len(options))%len(options)])
 	}
 	if f.step == 0 {
 		return nil
 	}
-	v, err := strconv.ParseFloat(cur, 64)
+	v, err := strconv.ParseFloat(f.get(*c), 64)
 	if err != nil {
 		return err
 	}
@@ -84,6 +100,14 @@ func zotero(c *model.Config) *model.ZoteroConfig {
 	return c.Zotero
 }
 
+func reranker(c *model.Config) *model.ProviderConfig  { return &c.Reranker }
+func embedding(c *model.Config) *model.ProviderConfig { return &c.Embedding }
+
+func withChoices(f field, choices func(model.Config) []string) field {
+	f.choices = choices
+	return f
+}
+
 func fields() []field {
 	const (
 		retrieval = "检索默认值"
@@ -108,12 +132,14 @@ func fields() []field {
 				c.Alpha = v
 				return nil
 			}},
+		provider(rerank, "reranker.provider", immediate, rerankPresets, reranker),
 		text(rerank, "reranker.type", immediate, func(c *model.Config) *string { return &c.Reranker.Type }, "none", "voyage", "http", "dashscope"),
-		text(rerank, "reranker.model", immediate, func(c *model.Config) *string { return &c.Reranker.Model }),
+		withChoices(text(rerank, "reranker.model", immediate, func(c *model.Config) *string { return &c.Reranker.Model }), models(rerankPresets, reranker)),
 		text(rerank, "reranker.baseUrl", immediate, func(c *model.Config) *string { return &c.Reranker.BaseURL }),
 		text(rerank, "reranker.apiKeyEnv", immediate, func(c *model.Config) *string { return &c.Reranker.APIKeyEnv }),
+		provider(embed, "embedding.provider", onRebuild, embedPresets, embedding),
 		text(embed, "embedding.type", onRebuild, func(c *model.Config) *string { return &c.Embedding.Type }, "voyage", "openai"),
-		text(embed, "embedding.model", onRebuild, func(c *model.Config) *string { return &c.Embedding.Model }),
+		withChoices(text(embed, "embedding.model", onRebuild, func(c *model.Config) *string { return &c.Embedding.Model }), models(embedPresets, embedding)),
 		integer(embed, "embedding.dimensions", onRebuild, 0, func(c *model.Config) *int { return &c.Embedding.Dimensions }),
 		text(embed, "embedding.baseUrl", onRebuild, func(c *model.Config) *string { return &c.Embedding.BaseURL }),
 		text(embed, "embedding.apiKeyEnv", immediate, func(c *model.Config) *string { return &c.Embedding.APIKeyEnv }),

@@ -66,7 +66,7 @@ my-project/
 | `rag clean --keep 3` | 预览旧索引清理；加 `--confirm` 才执行删除 |
 | `rag sync --all` / `rag status --all` | 依次处理所有登记的工作区 |
 | `rag workspace list` | 列出登记的工作区及其名字，配合 `-w NAME` 使用 |
-| `rag tui` | 交互式面板，`tab` 切换两个页签：Workspaces 列出登记的工作区及状态，可逐个或全部 sync，enter 打开；设置页查看索引状态、编辑并保存配置、带进度条运行 sync / rebuild / clean |
+| `rag tui` | 交互式面板，`tab` 切换两个页签：Workspaces 列出登记的工作区及状态，可逐个或全部 sync，enter 打开；设置页查看索引状态、编辑并保存配置、带进度条运行 sync / rebuild / clean；`reranker.provider` / `embedding.provider` 选 Voyage 或 DashScope 时一次设好 type、baseUrl、apiKeyEnv 和模型，model 在 enter 后边输边检索候选 |
 
 `rag sync` 递归扫描单一文档根目录，并对 canonical 内容及 Manifest metadata 计算哈希。未变化的文档跳过解析和 embedding。每个成功替换在事务内完成；失败文档保留原有 chunks。只有扫描完整、成功且稳定时才应用删除差集。处理期间发生变化的文件留待下次同步。
 
