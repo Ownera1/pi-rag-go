@@ -142,7 +142,8 @@ func TestConnectCodexMergesProjectConfigAndProtectsConflicts(t *testing.T) {
 	}
 	path := filepath.Join(directory, "config.toml")
 	original := []byte("# keep this comment\nmodel = 'existing-model'\n[mcp_servers.other]\nurl = 'https://example.invalid/mcp'\n")
-	if err := os.WriteFile(path, original, 0600); err != nil {
+	// A committed project config is often group- and world-readable.
+	if err := os.WriteFile(path, original, 0644); err != nil {
 		t.Fatal(err)
 	}
 	var out, stderr bytes.Buffer
@@ -158,6 +159,9 @@ func TestConnectCodexMergesProjectConfigAndProtectsConflicts(t *testing.T) {
 	b, _ := os.ReadFile(path)
 	if !bytes.HasPrefix(b, original) {
 		t.Fatalf("project config rewritten:\n%s", b)
+	}
+	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0644 {
+		t.Fatalf("mode not kept: %v %v", st.Mode(), err)
 	}
 	var cfg map[string]any
 	if err := toml.Unmarshal(b, &cfg); err != nil {

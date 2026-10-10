@@ -469,7 +469,12 @@ func codexServers(b []byte) (map[string]any, error) {
 }
 
 func readCodex(h host) (string, os.FileMode, []byte, error) {
-	path := filepath.Join(codexHome(h), "config.toml")
+	return readCodexFile(filepath.Join(codexHome(h), "config.toml"))
+}
+
+// readCodexFile returns the file to write, its mode (0600 for a new file) and
+// its content, nil when it does not exist.
+func readCodexFile(path string) (string, os.FileMode, []byte, error) {
 	// Edit a symlinked config, such as one from a dotfiles repository, in place
 	// instead of replacing the link.
 	if real, err := filepath.EvalSymlinks(path); err == nil {

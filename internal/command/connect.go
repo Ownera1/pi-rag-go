@@ -69,16 +69,13 @@ func connect(ctx context.Context, args []string, out, stderr io.Writer, execute 
 	defer release()
 	if fs.Arg(0) == "codex" {
 		directory := filepath.Join(root, ".codex")
-		path := filepath.Join(directory, "config.toml")
-		cfg := map[string]any{}
-		b, e := os.ReadFile(path)
-		if e != nil && !errors.Is(e, os.ErrNotExist) {
+		path, mode, b, e := readCodexFile(filepath.Join(directory, "config.toml"))
+		if e != nil {
 			return e
 		}
-		if e == nil {
-			if e = toml.Unmarshal(b, &cfg); e != nil {
-				return fmt.Errorf("invalid project Codex configuration: %w", e)
-			}
+		cfg := map[string]any{}
+		if e = toml.Unmarshal(b, &cfg); e != nil {
+			return fmt.Errorf("invalid project Codex configuration: %w", e)
 		}
 		servers := map[string]any{}
 		if existing, ok := cfg["mcp_servers"]; ok {
@@ -105,10 +102,7 @@ func connect(ctx context.Context, args []string, out, stderr io.Writer, execute 
 		if e = os.MkdirAll(directory, 0700); e != nil {
 			return e
 		}
-		if real, e := filepath.EvalSymlinks(path); e == nil {
-			path = real
-		}
-		if e = workspace.AtomicFile(path, b, 0600); e != nil {
+		if e = workspace.AtomicFile(path, b, mode); e != nil {
 			return e
 		}
 	} else {
