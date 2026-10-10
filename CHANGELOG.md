@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.7.3 (2026-10-10)
+
+No rebuild needed: v0.7.x indexes stay compatible. `rag tui` offers the models an endpoint lists, `rag connect codex` keeps the config file's mode, a query falls back to BM25 only for transient embedding errors, and large Markdown files parse in linear time.
 
 - `rag connect codex` keeps the mode of an existing `.codex/config.toml` instead of rewriting it as `0600`, as `rag install` already did for the user-wide Codex config. A project config committed as `0644` lost group and world read access. In a scratch workspace with a `0644` config, v0.7.2 left it `-rw-------` and this build `-rw-r--r--`; a new config is still created `0600`.
 - A query falls back to BM25 only when its embedding fails for a reason a retry may clear: a timeout, a refused or reset connection, a failed lookup, a rate limit or a server error. The decision matched error text, so a 4xx response whose body mentioned "connection" or "network" fell back instead of failing, and a TLS error's text decided too; it now reads the response status and the network error type. A test endpoint answering 400 with "invalid connection settings" fell back on v0.7.2 and fails the query with this build; 503 and a closed port still fall back.
