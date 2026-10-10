@@ -32,16 +32,17 @@ func Indexed(text string) string {
 // Query escapes FTS terms and uses bigrams for longer Han runs. Mixed-language
 // queries retain non-Han words. Any term may match; BM25 ranks chunks sharing
 // more bigrams first, so questions recall without exact phrasing. One-character
-// queries use the unigram entries present in the index.
-func Query(text string) (string, bool) {
-	terms := []string{}
+// queries use the unigram entries present in the index. bigrams matches the Han
+// bigrams alone and is empty when the query has none.
+func Query(text string) (query, bigrams string, hasHan bool) {
+	terms, pairs := []string{}, []string{}
 	var run []rune
 	kind := 0
-	hasHan := false
 	flush := func() {
 		if kind == 1 && len(run) > 1 {
 			for i := 0; i+1 < len(run); i++ {
 				terms = append(terms, string(run[i:i+2]))
+				pairs = append(pairs, string(run[i:i+2]))
 			}
 		} else if len(run) > 0 {
 			terms = append(terms, string(run))
@@ -65,8 +66,12 @@ func Query(text string) (string, bool) {
 		}
 	}
 	flush()
+	return or(terms), or(pairs), hasHan
+}
+
+func or(terms []string) string {
 	for i, term := range terms {
 		terms[i] = `"` + strings.ReplaceAll(term, `"`, `""`) + `"`
 	}
-	return strings.Join(terms, " OR "), hasHan
+	return strings.Join(terms, " OR ")
 }

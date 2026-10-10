@@ -15,21 +15,22 @@ func TestIndexedKeepsTextAndAddsHanNgrams(t *testing.T) {
 
 func TestQueryMatchesAnyTerm(t *testing.T) {
 	cases := []struct {
-		in, want string
-		han      bool
+		in, want, bigrams string
+		han               bool
 	}{
-		{"信道估计", `"信道" OR "道估" OR "估计"`, true},
-		{"信", `"信"`, true},
-		{"信道估计 pilot", `"信道" OR "道估" OR "估计" OR "pilot"`, true},
-		{"OFDM信道", `"OFDM" OR "信道"`, true},
-		{"如何估计？", `"如何" OR "何估" OR "估计"`, true},
-		{"channel estimation", `"channel" OR "estimation"`, false},
-		{"", ``, false},
+		{"信道估计", `"信道" OR "道估" OR "估计"`, `"信道" OR "道估" OR "估计"`, true},
+		{"信", `"信"`, ``, true},
+		{"信道估计 pilot", `"信道" OR "道估" OR "估计" OR "pilot"`, `"信道" OR "道估" OR "估计"`, true},
+		{"OFDM信道", `"OFDM" OR "信道"`, `"信道"`, true},
+		{"LoS 和 NLoS", `"LoS" OR "和" OR "NLoS"`, ``, true},
+		{"如何估计？", `"如何" OR "何估" OR "估计"`, `"如何" OR "何估" OR "估计"`, true},
+		{"channel estimation", `"channel" OR "estimation"`, ``, false},
+		{"", ``, ``, false},
 	}
 	for _, c := range cases {
-		got, han := Query(c.in)
-		if got != c.want || han != c.han {
-			t.Fatalf("%q: got %q %v, want %q %v", c.in, got, han, c.want, c.han)
+		got, bigrams, han := Query(c.in)
+		if got != c.want || bigrams != c.bigrams || han != c.han {
+			t.Fatalf("%q: got %q %q %v, want %q %q %v", c.in, got, bigrams, han, c.want, c.bigrams, c.han)
 		}
 	}
 }

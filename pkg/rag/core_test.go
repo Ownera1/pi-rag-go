@@ -461,6 +461,33 @@ func (markerEmbedding) EmbedDocuments(_ context.Context, in []string) ([][]float
 	return out, nil
 }
 
+func TestHybridDropsBM25WhenNoHanBigramMatches(t *testing.T) {
+	c := openTest(t, t.TempDir(), markerEmbedding{})
+	defer c.Close()
+	sourceFile(t, docPath(c, "a.txt"), []byte("kalman filter tracking kalman za0"))
+	sourceFile(t, docPath(c, "c.txt"), []byte("recursive state estimation zc1"))
+	sourceFile(t, docPath(c, "d.txt"), []byte("卡尔曼 smoothing zd5"))
+	first := func(query, mode string) string {
+		t.Helper()
+		alpha := 1.0
+		q, err := c.Query(context.Background(), query, QueryOptions{Alpha: &alpha, Mode: mode})
+		if err != nil || len(q.Hits) == 0 {
+			t.Fatalf("%s %s: %+v %v", query, mode, q, err)
+		}
+		return filepath.Base(q.Hits[0].Chunk.Path)
+	}
+	// Only "kalman" matches; ranking by it alone would put a first.
+	if got := first("kalman 滤波器", "hybrid"); got != "c.txt" {
+		t.Fatalf("unmatched bigrams kept BM25: %s", got)
+	}
+	if got := first("kalman 滤波器", "bm25"); got != "a.txt" {
+		t.Fatalf("bm25 mode: %s", got)
+	}
+	if got := first("卡尔曼 smoothing", "hybrid"); got != "d.txt" {
+		t.Fatalf("matched bigram dropped BM25: %s", got)
+	}
+}
+
 func TestHybridFusionRewardsAgreementAcrossRetrievers(t *testing.T) {
 	c := openTest(t, t.TempDir(), markerEmbedding{})
 	defer c.Close()
