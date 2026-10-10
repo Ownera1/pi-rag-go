@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Ownera1/rag-go/internal/mcpserver"
+	"github.com/Ownera1/rag-go/internal/workspace"
 	"github.com/Ownera1/rag-go/pkg/rag"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -18,7 +19,7 @@ import (
 func MCP(ctx context.Context, args []string, stderr io.Writer) error {
 	fs := flag.NewFlagSet("rag mcp", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	root := fs.String("workspace", "", "workspace root")
+	root := workspaceFlag(fs)
 	transport := fs.String("transport", "stdio", "stdio or http")
 	readOnly := fs.Bool("read-only", false, "expose only query/status/list; disable automatic sync")
 	listen := fs.String("listen", "127.0.0.1:0", "HTTP loopback address; 0 chooses a free port")
@@ -40,7 +41,11 @@ func MCP(ctx context.Context, args []string, stderr io.Writer) error {
 		}
 		return err
 	}
-	core, err := rag.Open(rag.Options{WorkspaceDir: *root, ReadOnly: *readOnly || *transport == "http"})
+	dir, err := workspace.Resolve(*root)
+	if err != nil {
+		return err
+	}
+	core, err := rag.Open(rag.Options{WorkspaceDir: dir, ReadOnly: *readOnly || *transport == "http"})
 	if err != nil {
 		return err
 	}

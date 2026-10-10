@@ -297,6 +297,18 @@ func TestWorkspaceRegistryNamesAllAndRemove(t *testing.T) {
 	if out, err := run("status", "-w", "notes"); err != nil || !strings.Contains(out, `"workspaceDir":"`+c+`"`) {
 		t.Fatalf("status -w notes: %s %v", out, err)
 	}
+	// Commands outside the shared flag set resolve names too.
+	if out, err := run("zotero", "links", "-w", "notes"); err != nil || out != "[]\n" {
+		t.Fatalf("zotero links -w notes: %q %v", out, err)
+	}
+	dataset := filepath.Join(base, "cases.jsonl")
+	if err := os.WriteFile(dataset, []byte(`{"id":"1","query":"q","relevant":[{"contains":"x"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The unsynced workspace was found and opened.
+	if _, err := run("eval", "-w", "notes", "--dataset", dataset, "--modes", "bm25"); err == nil || !strings.Contains(err.Error(), "synchronized compatible index") {
+		t.Fatalf("eval -w notes: %v", err)
+	}
 	if _, err := run("status", "--all", "-w", "notes"); err == nil {
 		t.Fatal("accepted --all with -w")
 	}

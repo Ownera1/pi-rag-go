@@ -43,15 +43,19 @@ func Connect(ctx context.Context, args []string, out, stderr io.Writer) error {
 func connect(ctx context.Context, args []string, out, stderr io.Writer, execute executor, exe string) error {
 	fs := flag.NewFlagSet("rag connect", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	explicit := fs.String("workspace", "", "workspace root")
+	explicit := workspaceFlag(fs)
 	replace := fs.Bool("replace", false, "replace a conflicting project registration")
 	if err := fs.Parse(ReorderFlags(args, map[string]bool{"replace": true, "help": true, "h": true})); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 || (fs.Arg(0) != "claude" && fs.Arg(0) != "codex") {
-		return errors.New("usage: rag connect claude|codex [--workspace PATH] [--replace]")
+		return errors.New("usage: rag connect claude|codex [-w NAME|PATH] [--replace]")
 	}
-	core, err := rag.Open(rag.Options{WorkspaceDir: *explicit})
+	dir, err := workspace.Resolve(*explicit)
+	if err != nil {
+		return err
+	}
+	core, err := rag.Open(rag.Options{WorkspaceDir: dir})
 	if err != nil {
 		return err
 	}

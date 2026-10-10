@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `rag zotero`, `rag eval`, `rag mcp` and `rag connect` accept `-w NAME|PATH` like the other commands, so a registered workspace can be named from any directory. They took only `--workspace` with a path, and rejected `-w` with "flag provided but not defined", although the README says any command can name a workspace. From a directory outside the real workspace, `rag zotero status -w communications` failed that way on v0.7.0 and reports the library's 65 items with this build; `rag eval -w communications` evaluates its active index.
+
 ## v0.7.0 (2026-10-09)
 
 Existing v0.6 indexes report `rebuild required`; run `rag rebuild` once after upgrading. MinerU figure captions get chunks of their own.
