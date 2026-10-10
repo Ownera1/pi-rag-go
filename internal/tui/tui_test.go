@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -95,7 +97,7 @@ func TestImpactTagsMatchIndexCompatibility(t *testing.T) {
 		"embedding.apiKeyEnv": "OTHER_KEY", "documents": "other", "excludePatterns": "drafts/**",
 		"zotero.baseUrl": "http://localhost:23119/api/", "zotero.libraryId": "2",
 	}
-	for _, f := range fields() {
+	for _, f := range fields(nil) {
 		cfg := clone(base)
 		var err error
 		if v, ok := typed[f.name]; ok {
@@ -433,5 +435,50 @@ func TestProviderPresetsAndModelSearch(t *testing.T) {
 	press(t, m, "\r")
 	if m.input.Value() != "my-reranker" || m.matches() != nil {
 		t.Fatalf("custom model input %q matches %v", m.input.Value(), m.matches())
+	}
+}
+
+func TestRecentKeepsTwoNewestGenerations(t *testing.T) {
+	got := recent([]string{"voyage-4-lite", "voyage-3-large", "voyage-4", "voyage-3.5", "voyage-2", "voyage-code-3",
+		"text-embedding-v4", "text-embedding-v3", "text-embedding-v2", "qwen3.7-text-embedding-flash", "qwen3-rerank", "qwen2.5-rerank", "jina-reranker"})
+	want := []string{"voyage-4-lite", "voyage-4", "voyage-3.5", "voyage-code-3",
+		"text-embedding-v4", "text-embedding-v3", "qwen3.7-text-embedding-flash", "qwen3-rerank", "jina-reranker"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v", got)
+	}
+}
+
+// A model field also offers what its endpoint lists for its role, newest two
+// generations only, fetched once with the workspace's credential rules.
+func TestModelFieldOffersListedModels(t *testing.T) {
+	t.Setenv("RAG_GO_CONFIG_DIR", t.TempDir())
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write([]byte(`{"data":[{"id":"rerank-x-1"},{"id":"rerank-x-2"},{"id":"chat-x-9"},{"id":"rerank-x-3"},{"id":"bge-reranker-v2-m3"}]}`))
+	}))
+	defer server.Close()
+	core, cfg := indexed(t)
+	cfg.Reranker = model.ProviderConfig{Type: "http", Model: "rerank-x-3", BaseURL: server.URL}
+	if err := workspace.AtomicJSON(configPath(core), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Register(context.Background(), core.WorkspaceDir()); err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(context.Background(), core, open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(m, m.Init()())
+	at(m, "reranker.model")
+	if got := m.fields[m.cursor].offered(m.draft); !slices.Equal(got, []string{"rerank-x-2", "rerank-x-3", "bge-reranker-v2-m3"}) {
+		t.Fatalf("offered %v", got)
+	}
+	run(m, keyMsg("\r"))
+	run(m, keyMsg("bge"))
+	run(m, keyMsg("\r"))
+	if m.draft.Reranker.Model != "bge-reranker-v2-m3" || requests != 1 {
+		t.Fatalf("model %q after %d requests", m.draft.Reranker.Model, requests)
 	}
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `rag tui` also offers the models an endpoint lists at `GET {baseUrl}/models`, fetched in the background once per endpoint when the panel opens or an edit points a provider somewhere new, with the same endpoint and credential rules as queries. Names are kept by role, `embed` for embedding and `rerank` for the reranker, and joined to the preset's own models; of each family, the name before its first number, only the two newest versions stay, so `voyage-3-large` and `text-embedding-v2` are not offered while `voyage-4` and `voyage-3.5` or `text-embedding-v4` and `v3` exist. Both DashScope presets read `compatible-mode/v1/models`, which lists the rerankers too though the rerank endpoint has no list; it names only the newest models (`qwen3.7-text-embedding`, `qwen3.7-text-embedding-flash`, `qwen3.7-text-rerank`) and not `text-embedding-v4` or `qwen3-rerank`, which it still serves, so the presets keep their own lists. Voyage has no model list. A custom endpoint whose list arrives gets the same search; one without a list is typed freely as before. While searching, a list still loading or one that failed, such as for a missing key, says so under the matches. With this build, switching a scratch workspace to the DashScope embedding preset and searching `flash` offered `qwen3.7-text-embedding-flash`, which is in neither preset list.
+
 ## v0.7.2 (2026-10-10)
 
 No rebuild needed: v0.7.x indexes stay compatible. Qwen rerankers through DashScope, and `rag tui` sets up a provider from a preset, searches its models and checks every edit as it is made.

@@ -32,6 +32,7 @@ type field struct {
 	impact      impact
 	options     []string
 	choices     func(model.Config) []string
+	source      func(model.Config) string // where choices are fetched from
 	step        float64
 	get         func(model.Config) string
 	set         func(*model.Config, string) error
@@ -103,12 +104,8 @@ func zotero(c *model.Config) *model.ZoteroConfig {
 func reranker(c *model.Config) *model.ProviderConfig  { return &c.Reranker }
 func embedding(c *model.Config) *model.ProviderConfig { return &c.Embedding }
 
-func withChoices(f field, choices func(model.Config) []string) field {
-	f.choices = choices
-	return f
-}
-
-func fields() []field {
+// fields lists the settings; model fields offer the lists fetched holds.
+func fields(fetched map[string]listing) []field {
 	const (
 		retrieval = "检索默认值"
 		rerank    = "Reranker"
@@ -134,12 +131,12 @@ func fields() []field {
 			}},
 		provider(rerank, "reranker.provider", immediate, rerankPresets, reranker),
 		text(rerank, "reranker.type", immediate, func(c *model.Config) *string { return &c.Reranker.Type }, "none", "voyage", "http", "dashscope"),
-		withChoices(text(rerank, "reranker.model", immediate, func(c *model.Config) *string { return &c.Reranker.Model }), models(rerankPresets, reranker)),
+		models(text(rerank, "reranker.model", immediate, func(c *model.Config) *string { return &c.Reranker.Model }), rerankPresets, reranker, "rerank", fetched),
 		text(rerank, "reranker.baseUrl", immediate, func(c *model.Config) *string { return &c.Reranker.BaseURL }),
 		text(rerank, "reranker.apiKeyEnv", immediate, func(c *model.Config) *string { return &c.Reranker.APIKeyEnv }),
 		provider(embed, "embedding.provider", onRebuild, embedPresets, embedding),
 		text(embed, "embedding.type", onRebuild, func(c *model.Config) *string { return &c.Embedding.Type }, "voyage", "openai"),
-		withChoices(text(embed, "embedding.model", onRebuild, func(c *model.Config) *string { return &c.Embedding.Model }), models(embedPresets, embedding)),
+		models(text(embed, "embedding.model", onRebuild, func(c *model.Config) *string { return &c.Embedding.Model }), embedPresets, embedding, "embed", fetched),
 		integer(embed, "embedding.dimensions", onRebuild, 0, func(c *model.Config) *int { return &c.Embedding.Dimensions }),
 		text(embed, "embedding.baseUrl", onRebuild, func(c *model.Config) *string { return &c.Embedding.BaseURL }),
 		text(embed, "embedding.apiKeyEnv", immediate, func(c *model.Config) *string { return &c.Embedding.APIKeyEnv }),
