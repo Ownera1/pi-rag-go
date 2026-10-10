@@ -28,7 +28,7 @@ type HTTP struct {
 }
 
 func NewHTTP(cfg model.ProviderConfig, timeoutMs, retries int, batchSizes ...int) (*HTTP, error) {
-	if cfg.Type != "voyage" && cfg.Type != "openai" && cfg.Type != "http" {
+	if cfg.Type != "voyage" && cfg.Type != "openai" && cfg.Type != "http" && cfg.Type != "dashscope" {
 		return nil, fmt.Errorf("unsupported protocol %q", cfg.Type)
 	}
 	if cfg.BaseURL == "" {
@@ -243,6 +243,11 @@ func (p *HTTP) Rerank(ctx context.Context, query string, docs []model.RerankDoc,
 		body["top_n"] = topK
 	}
 	path := "/rerank"
+	if p.cfg.Type == "dashscope" {
+		// Model Studio names its compatible endpoint in the plural; the body
+		// and results are the generic HTTP ones.
+		path = "/reranks"
+	}
 	if err := p.post(ctx, path, body, &out); err != nil {
 		return nil, err
 	}

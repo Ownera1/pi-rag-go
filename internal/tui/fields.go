@@ -108,7 +108,7 @@ func fields() []field {
 				c.Alpha = v
 				return nil
 			}},
-		text(rerank, "reranker.type", immediate, func(c *model.Config) *string { return &c.Reranker.Type }, "none", "voyage", "http"),
+		text(rerank, "reranker.type", immediate, func(c *model.Config) *string { return &c.Reranker.Type }, "none", "voyage", "http", "dashscope"),
 		text(rerank, "reranker.model", immediate, func(c *model.Config) *string { return &c.Reranker.Model }),
 		text(rerank, "reranker.baseUrl", immediate, func(c *model.Config) *string { return &c.Reranker.BaseURL }),
 		text(rerank, "reranker.apiKeyEnv", immediate, func(c *model.Config) *string { return &c.Reranker.APIKeyEnv }),
