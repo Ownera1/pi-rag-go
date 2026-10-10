@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/Ownera1/rag-go/internal/model"
 	"github.com/Ownera1/rag-go/internal/workspace"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -119,7 +120,7 @@ func install(ctx context.Context, args []string, in io.Reader, out, stderr io.Wr
 	}
 	key := ""
 	if name := cfg.Embedding.APIKeyEnv; name != "" {
-		if !workspace.EnvName.MatchString(name) {
+		if !model.EnvName.MatchString(name) {
 			return errors.New("invalid apiKeyEnv")
 		}
 		// Agents launched from a desktop app rarely inherit the shell

@@ -264,6 +264,43 @@ func TestSaveWritesDraftAndRefusesOutsideEdit(t *testing.T) {
 	}
 }
 
+// The draft stays a valid configuration: a field with options takes no typed
+// value, and an edit that breaks a limit is refused with the limit named.
+func TestEditsKeepDraftValid(t *testing.T) {
+	core, _ := indexed(t)
+	m, err := New(context.Background(), core, open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := func(name string) {
+		for i, f := range m.fields {
+			if f.name == name {
+				m.cursor = i
+			}
+		}
+	}
+	at("reranker.type")
+	press(t, m, "\r")
+	if m.editing || m.draft.Reranker.Type != "voyage" {
+		t.Fatalf("enter on options: editing %v type %q", m.editing, m.draft.Reranker.Type)
+	}
+	at("topK")
+	for value, want := range map[string]string{"0": "topK (0) must be at least 1", "abc": "topK must be an integer"} {
+		press(t, m, "\r")
+		m.input.SetValue(value)
+		press(t, m, "\r")
+		if !m.editing || m.draft.TopK != 5 || !strings.Contains(ansi.Strip(m.msg), want) {
+			t.Fatalf("typed %q: editing %v topK %d msg %q", value, m.editing, m.draft.TopK, m.msg)
+		}
+		press(t, m, "\x1b")
+	}
+	at("candidateTopK")
+	press(t, m, "h", "h", "h", "h", "h", "h")
+	if m.draft.CandidateTopK != 5 || !strings.Contains(ansi.Strip(m.msg), "candidateTopK (0) must be at least topK (5)") {
+		t.Fatalf("stepped past topK: %d %q", m.draft.CandidateTopK, m.msg)
+	}
+}
+
 // The list syncs every workspace in turn, skipping missing ones, and opens a
 // workspace only after confirming that unsaved settings are discarded.
 func TestListSyncsAllAndOpensWorkspaces(t *testing.T) {

@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -21,8 +23,8 @@ const (
 var impactLabel = [...]string{"即时", "sync", "zotero", "rebuild"}
 
 // field is one editable configuration value. Fields with options cycle with
-// ←/→, fields with a step adjust numerically, and every field accepts typed
-// input.
+// ←/→ and enter, fields with a step adjust numerically, and every other field
+// accepts typed input.
 type field struct {
 	group, name string
 	impact      impact
@@ -64,10 +66,11 @@ func integer(group, name string, im impact, step int, p func(*model.Config) *int
 		get: func(c model.Config) string { return strconv.Itoa(*p(&c)) },
 		set: func(c *model.Config, s string) error {
 			v, err := strconv.Atoi(strings.TrimSpace(s))
-			if err == nil {
-				*p(c) = v
+			if err != nil {
+				return fmt.Errorf("%s must be an integer", name)
 			}
-			return err
+			*p(c) = v
+			return nil
 		}}
 }
 
@@ -99,10 +102,11 @@ func fields() []field {
 			get: func(c model.Config) string { return strconv.FormatFloat(c.Alpha, 'f', 2, 64) },
 			set: func(c *model.Config, s string) error {
 				v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-				if err == nil {
-					c.Alpha = min(1, max(0, v))
+				if err != nil {
+					return errors.New("alpha must be a number")
 				}
-				return err
+				c.Alpha = v
+				return nil
 			}},
 		text(rerank, "reranker.type", immediate, func(c *model.Config) *string { return &c.Reranker.Type }, "none", "voyage", "http"),
 		text(rerank, "reranker.model", immediate, func(c *model.Config) *string { return &c.Reranker.Model }),

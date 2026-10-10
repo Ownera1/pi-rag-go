@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `rag tui` checks every edit as it is made instead of only on `ctrl+s`. A setting with fixed choices (`reranker.type`, `embedding.type`, `chunking.mode`, `zotero.libraryType`, `zotero.startOnDemand`) cycles with `enter` as with the arrow keys and no longer takes typed text, which saving rejected only afterwards. A typed or stepped value that breaks a limit is refused and the draft keeps its last valid value, so the arrow keys can no longer take `topK` to 0. Configuration errors name the setting and the bound: `invalid chunking thresholds` is now, for example, `chunking.semanticTarget (280) must be at least chunking.semanticMin (300)`, for `rag` commands and a hand-edited `config.json` as well. `alpha` outside [0, 1] is refused rather than silently clamped.
+- Configuration validation also checks that a provider `baseUrl` is an http(s) URL, that `apiKeyEnv` is an environment variable name rather than a pasted key, which would otherwise be written to `config.json`, that a reranker other than `none` names a model, and that `httpTimeoutMs` is at most 600000. The two registered real workspaces load unchanged.
+
 ## v0.7.1 (2026-10-10)
 
 No rebuild needed: v0.7.x indexes stay compatible. `-w` for every workspace command, and hybrid search without a reranker for Chinese questions about non-Chinese documents.

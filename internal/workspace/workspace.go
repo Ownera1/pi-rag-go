@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"syscall"
 	"time"
 
@@ -136,8 +135,6 @@ func AtomicFile(path string, b []byte, mode os.FileMode) error {
 	return nil
 }
 
-var EnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
 // GlobalDir holds user-wide defaults written by rag install. RAG_GO_CONFIG_DIR
 // overrides it; otherwise XDG_CONFIG_HOME/rag-go or ~/.config/rag-go.
 func GlobalDir() (string, error) {
@@ -256,7 +253,7 @@ func readCredentials(path string) (map[string]string, error) {
 		return nil, fmt.Errorf("invalid %s", path)
 	}
 	for key := range values {
-		if !EnvName.MatchString(key) {
+		if !model.EnvName.MatchString(key) {
 			return nil, errors.New("invalid credential environment name")
 		}
 	}

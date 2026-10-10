@@ -246,6 +246,21 @@ func (m *Model) changed() []field {
 	return out
 }
 
+// apply edits the draft, keeping the change only when the configuration stays
+// valid. The saved configuration is valid, so a refusal always concerns the
+// value just changed or a setting it is bounded by.
+func (m *Model) apply(edit func(*model.Config) error) error {
+	next := clone(m.draft)
+	if err := edit(&next); err != nil {
+		return err
+	}
+	if err := next.Validate(); err != nil {
+		return err
+	}
+	m.draft = next
+	return nil
+}
+
 // save writes cfg under the workspace write lock, refusing when the file no
 // longer holds what the panel loaded so another writer's edit is never lost.
 // It returns the configuration as the next operation will load it.
@@ -351,7 +366,8 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.editing {
 		switch k.String() {
 		case "enter":
-			if err := m.fields[m.cursor].set(&m.draft, m.input.Value()); err != nil {
+			f := m.fields[m.cursor]
+			if err := m.apply(func(c *model.Config) error { return f.set(c, m.input.Value()) }); err != nil {
 				m.msg = bad.Render(err.Error())
 				return m, nil
 			}
@@ -411,17 +427,27 @@ func (m *Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if k.String() == "left" || k.String() == "h" {
 			dir = -1
 		}
-		if err := m.fields[m.cursor].adjust(&m.draft, dir); err != nil {
+		f := m.fields[m.cursor]
+		if err := m.apply(func(c *model.Config) error { return f.adjust(c, dir) }); err != nil {
 			m.msg = bad.Render(err.Error())
 		}
 	case "enter":
+		// A field with options takes no typed value; enter picks the next one.
+		if f := m.fields[m.cursor]; len(f.options) > 0 {
+			if err := m.apply(func(c *model.Config) error { return f.adjust(c, 1) }); err != nil {
+				m.msg = bad.Render(err.Error())
+			}
+			return m, nil
+		}
 		m.editing = true
 		m.input.SetValue(m.fields[m.cursor].get(m.draft))
 		m.input.CursorEnd()
 		return m, m.input.Focus()
 	case "u":
 		f := m.fields[m.cursor]
-		_ = f.set(&m.draft, f.get(m.saved))
+		if err := m.apply(func(c *model.Config) error { return f.set(c, f.get(m.saved)) }); err != nil {
+			m.msg = bad.Render(err.Error())
+		}
 	case "esc":
 		if confirm != "" {
 			return m, nil
@@ -762,9 +788,9 @@ func (m *Model) footerLines(w int) (lines, help []string) {
 	case m.page == pageList:
 		help = keys(w, "", "上下", "选择", "enter", "打开", "s", "sync", "S", "全部 sync", "r", "刷新", "tab", "设置", "q", "退出")
 	case m.fullHelp:
-		help = keys(w, "", "上下或 j/k", "选择", "左右或 h/l", "调整", "enter", "输入", "u", "还原此项", "ctrl+s", "保存", "esc", "放弃/取消", "s", "sync", "R", "rebuild", "c", "clean", "r", "刷新", "tab 或 1/2", "切换页签", "?", "收起", "q", "退出")
+		help = keys(w, "", "上下或 j/k", "选择", "左右或 h/l", "调整", "enter", "输入/切换", "u", "还原此项", "ctrl+s", "保存", "esc", "放弃/取消", "s", "sync", "R", "rebuild", "c", "clean", "r", "刷新", "tab 或 1/2", "切换页签", "?", "收起", "q", "退出")
 	default:
-		help = keys(w, "", "上下", "选择", "左右", "调整", "enter", "输入", "ctrl+s", "保存", "s", "sync", "R", "rebuild", "tab", "列表", "?", "全部", "q", "退出")
+		help = keys(w, "", "上下", "选择", "左右", "调整", "enter", "输入/切换", "ctrl+s", "保存", "s", "sync", "R", "rebuild", "tab", "列表", "?", "全部", "q", "退出")
 	}
 	return lines, help
 }
