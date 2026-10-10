@@ -202,7 +202,7 @@ func TestFirstIndexFailureAndUnavailableRootKeepExistingIndex(t *testing.T) {
 	if err != nil || len(q.Hits) != 1 || q.Freshness != "unknown" || q.SyncError == "" {
 		t.Fatalf("unavailable root: %+v %v", q, err)
 	}
-	listed, _ := c.ListDocuments(ctx)
+	listed, _ := c.Documents(ctx)
 	if len(listed) != 1 {
 		t.Fatal("pruned inaccessible root")
 	}
@@ -224,8 +224,8 @@ func TestCanonicalSwitchIsAtomicDespiteAnotherFailedDocument(t *testing.T) {
 	if err == nil || r.Failed != 1 || r.Indexed != 1 {
 		t.Fatalf("partial canonical switch: %+v %v", r, err)
 	}
-	listed, _ := c.ListDocuments(ctx)
-	if len(listed) != 1 || listed[0] != jsonPath {
+	listed, _ := c.Documents(ctx)
+	if len(listed) != 1 || listed[0].Path != jsonPath {
 		t.Fatalf("duplicate artifacts: %v", listed)
 	}
 	q, err := c.Query(ctx, "newmarker", QueryOptions{Mode: "bm25", DisableSync: true})

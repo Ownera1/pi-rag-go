@@ -51,5 +51,4 @@ for binary in rag; do
   chmod 755 "$destination"
   mv -f "$destination" "$prefix/$binary"
 done
-printf 'Installed %s to %s. Add this directory to PATH and run rag init.\n' "$version" "$prefix"
-printf 'Run rag init inside each workspace, then rag connect claude or rag connect codex.\n'
+printf 'Installed %s to %s. Add this directory to PATH, then run rag install.\n' "$version" "$prefix"

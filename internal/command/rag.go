@@ -108,7 +108,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errout io.Writer
 		return explainMissing(tui.Run(ctx, dir))
 	}
 	if cmd != "sync" && cmd != "query" && cmd != "status" && cmd != "rebuild" && cmd != "clean" && cmd != "list" && cmd != "outline" && cmd != "read" && cmd != "fix" {
-		return fmt.Errorf("unknown command %q; see rag --help and the v0.2 migration guide", cmd)
+		return fmt.Errorf("unknown command %q; see rag --help", cmd)
 	}
 	fs := flag.NewFlagSet("rag "+cmd, flag.ContinueOnError)
 	fs.SetOutput(errout)

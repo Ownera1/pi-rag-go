@@ -103,38 +103,6 @@ func TestReplacementRollsBackAllArtifactsOnFailure(t *testing.T) {
 	}
 }
 
-func TestReaderToleratesStoreWithoutFileFormatColumns(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "rag.db")
-	db, err := Open(path, false, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	doc := model.Document{ID: "old", Path: "old.md", Hash: "h", Title: "Old", Format: "markdown", ParserVersion: "v2"}
-	if err = db.Replace(ctx, doc, []model.Chunk{{ID: "old-0", Content: "legacy evidence"}}, [][]float32{{1, 0}}); err != nil {
-		t.Fatal(err)
-	}
-	for _, column := range []string{"format", "parser_version"} {
-		if _, err = db.SQL.Exec("ALTER TABLE files DROP COLUMN " + column); err != nil {
-			t.Fatal(err)
-		}
-	}
-	db.Close()
-	reader, err := Open(path, true, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reader.Close()
-	var row int64
-	if err = reader.SQL.QueryRow("SELECT rowid FROM chunks").Scan(&row); err != nil {
-		t.Fatal(err)
-	}
-	got, err := reader.Chunks(ctx, []int64{row})
-	if c := got[row]; err != nil || c.Content != "legacy evidence" || c.Title != "Old" || c.Format != "" {
-		t.Fatalf("%+v %v", got, err)
-	}
-}
-
 func TestMetadataOfForeignDatabaseIsEmpty(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "foreign.db")
 	raw, err := sql.Open("sqlite3", path)

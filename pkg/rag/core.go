@@ -494,18 +494,6 @@ func (c *Core) Status(ctx context.Context) (Status, error) {
 	return status, ctx.Err()
 }
 
-func (c *Core) ListDocuments(ctx context.Context) ([]string, error) {
-	s, err := c.operation(ctx, false)
-	if err != nil {
-		return nil, err
-	}
-	defer s.close()
-	if s.db == nil {
-		return []string{}, nil
-	}
-	return s.db.List(ctx)
-}
-
 func (c *Core) Cleanup(ctx context.Context, keep int, dryRun bool) (CleanupResult, error) {
 	s, err := c.operation(ctx, true)
 	if err != nil {

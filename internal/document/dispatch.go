@@ -572,9 +572,6 @@ func parseBytes(ctx context.Context, path string, b []byte, format string) ([]mo
 	case "pdf":
 		return nil, errors.New("PDF is not an indexable document; convert it to Markdown or structured JSON with an external tool")
 	case "text":
-		if !utf8.Valid(b) || bytes.IndexByte(b, 0) >= 0 {
-			return nil, errors.New("input is not UTF-8 text")
-		}
 		text := string(b)
 		if strings.TrimSpace(text) == "" {
 			return nil, nil
