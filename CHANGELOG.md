@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `rag zotero`, `rag eval`, `rag connect` and `rag mcp` accept `-w NAME|PATH` like the other commands. They defined their own `--workspace` flag, which took only a path and had no `-w` shorthand, so `rag zotero sync -w communications` failed with "flag provided but not defined: -w" although `rag --help` lists `-w NAME|PATH` for every command. They now resolve registered names too, and outside a workspace they name the registered workspaces. `rag init` still takes a path, since it creates the workspace. Run from a directory outside the real workspace, `rag zotero status -w communications` and `rag eval -w communications` work with this build.
+- Without a reranker, a hybrid query containing Han bigrams that match no indexed chunk ranks by vector search alone. A Chinese question about English papers matched only its stray Latin terms, such as "LoS" or "RKHS", and BM25 ranked chunks by those alone with weight alpha. A query whose bigrams match anything, the `bm25` mode, and the rerank candidates are unchanged. On the real six-paper workspace (English papers), over its 60 Chinese questions plus 15 English controls in `hybrid` mode: the Chinese questions went from Recall@5 / MRR 0.950 / 0.754 to 0.950 / 0.769, now identical to `vector`, with 4 questions ranked higher and 3 lower; the controls were unchanged (0.956 / 0.847).
+
 ## v0.7.0 (2026-10-09)
 
 Existing v0.6 indexes report `rebuild required`; run `rag rebuild` once after upgrading. MinerU figure captions get chunks of their own.

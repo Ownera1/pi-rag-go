@@ -138,10 +138,13 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 		recall = candidate
 	}
 	fts := []store.Match{}
+	bigrams := ""
 	if mode != "vector" {
 		// The Han index also holds the original text, so it serves Latin
 		// terms of a mixed query too.
-		if hanQuery, hasHan := searchtext.Query(query); hasHan {
+		hanQuery, pairs, hasHan := searchtext.Query(query)
+		if hasHan {
+			bigrams = pairs
 			fts, err = c.db.FTSHan(ctx, hanQuery, 200, filtered)
 		} else {
 			fts, err = c.db.FTS(ctx, quotedQuery(query), 200, filtered)
@@ -176,7 +179,18 @@ func (c *session) query(ctx context.Context, query string, opts QueryOptions, pl
 		}
 	} else {
 		out.Method = "bm25"
-
+	}
+	// A Chinese question about English papers matches none of its bigrams,
+	// and BM25 then ranks chunks by stray Latin terms such as "LoS". Without
+	// a reranker to undo that, rank by the vector list alone.
+	if reranker == nil && mode == "hybrid" && len(vec) > 0 && bigrams != "" && len(fts) > 0 {
+		matched, err := c.db.FTSHan(ctx, bigrams, 1, filtered)
+		if err != nil {
+			return out, err
+		}
+		if len(matched) == 0 {
+			fts = nil
+		}
 	}
 	ids := []int64{}
 	seen := map[int64]bool{}

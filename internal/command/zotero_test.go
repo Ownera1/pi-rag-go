@@ -52,7 +52,7 @@ func TestZoteroCLIWorksWithoutDocumentEmbedding(t *testing.T) {
 		t.Fatal(synced)
 	}
 	out.Reset()
-	if err := Run(ctx, []string{"zotero", "status", "--workspace", root}, strings.NewReader(""), &out, &stderr); err != nil {
+	if err := Run(ctx, []string{"zotero", "status", "-w", root}, strings.NewReader(""), &out, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	var status map[string]any
