@@ -93,7 +93,7 @@ func (c Config) Validate() error {
 	if c.Embedding.Model == "" {
 		return errors.New("embedding.model is required")
 	}
-	if c.Reranker.Type != "none" && c.Reranker.Type != "voyage" && c.Reranker.Type != "http" {
+	if c.Reranker.Type != "none" && c.Reranker.Type != "voyage" && c.Reranker.Type != "http" && c.Reranker.Type != "dashscope" {
 		return fmt.Errorf("unsupported reranker type %q", c.Reranker.Type)
 	}
 	if c.Reranker.Type != "none" && c.Reranker.Model == "" {

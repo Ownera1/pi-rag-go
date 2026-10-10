@@ -165,7 +165,9 @@ rag connect codex
 
 对可信地址，环境变量凭据优先于 `.rag-go/credentials.json`；其他地址只接收工作区凭据。凭据直接传给 provider，不修改进程环境。存储目录权限为 `0700`，凭据和 JSON 状态权限为 `0600`；配置、索引和 status 输出不保存或打印密钥。
 
-Embedding 支持 Voyage，以及接收 `POST {baseUrl}/embeddings` 并返回 `data[{index,embedding}]` 的 OpenAI-compatible 服务。可选 rerank 支持 Voyage 或通用 HTTP `POST {baseUrl}/rerank`，请求为 `{model,query,documents,top_n}`，响应为 `results[{index,relevance_score}]`。`none` 禁用 rerank。
+Embedding 支持 Voyage，以及接收 `POST {baseUrl}/embeddings` 并返回 `data[{index,embedding}]` 的 OpenAI-compatible 服务。可选 rerank 支持 Voyage、通用 HTTP `POST {baseUrl}/rerank`（请求为 `{model,query,documents,top_n}`，响应为 `results[{index,relevance_score}]`），以及请求相同、地址为 `POST {baseUrl}/reranks` 的 `dashscope`。`none` 禁用 rerank。
+
+阿里云百炼（DashScope）的 Qwen 模型两者都能接：embedding 用 `openai` 类型，`baseUrl` 为 `https://dashscope.aliyuncs.com/compatible-mode/v1`，模型 `text-embedding-v4`，`dimensions` 填其默认值 1024（`openai` 类型不发送维度）；reranker 用 `dashscope` 类型，`baseUrl` 为 `https://dashscope.aliyuncs.com/compatible-api/v1`，模型 `qwen3-rerank`。`indexing.embeddingBatchSize` 设为 10，即 `text-embedding-v4` 单次请求的上限。两者读取 `apiKeyEnv` 指定的密钥（例如 `DASHSCOPE_API_KEY`），由于不是 `rag install` 记录的端点，只从工作区读取：`rag init` 负责存入，新工作区取自环境变量，已有工作区在终端里询问。
 
 切块前会合并同一章节、同一页内相邻的正文 block，使 MinerU 等按段落导出的格式切出接近目标大小的块，且不会扩大页码范围。默认的 `semantic` 切块会先为每个句子级单元生成 embedding 来选择边界，再为最终的块生成 embedding，因此索引消耗的 embedding tokens 约为 `legacy` 的两倍。`indexing.embeddingWorkers`（默认 4）限制同时进行的文档 embedding 请求数。
 

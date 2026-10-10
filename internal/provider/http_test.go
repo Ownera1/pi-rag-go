@@ -106,6 +106,27 @@ func TestConfiguredEmbeddingBatchSize(t *testing.T) {
 	}
 }
 
+func TestDashScopeRerankPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			TopN int `json:"top_n"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || r.URL.Path != "/compatible-api/v1/reranks" || req.TopN != 1 {
+			t.Errorf("path %s top_n %d: %v", r.URL.Path, req.TopN, err)
+		}
+		_, _ = w.Write([]byte(`{"results":[{"index":1,"relevance_score":0.9},{"index":0,"relevance_score":0.1}]}`))
+	}))
+	defer server.Close()
+	p, err := NewHTTP(model.ProviderConfig{Type: "dashscope", Model: "qwen3-rerank", BaseURL: server.URL + "/compatible-api/v1"}, 3000, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.Rerank(context.Background(), "q", []model.RerankDoc{{ID: "a", Text: "a"}, {ID: "b", Text: "b"}}, 1)
+	if err != nil || len(got) != 1 || got[0].ID != "b" {
+		t.Fatalf("%v %v", got, err)
+	}
+}
+
 func TestRetryHonorsRetryAfter(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
