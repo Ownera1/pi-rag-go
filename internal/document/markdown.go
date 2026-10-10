@@ -1,6 +1,7 @@
 package document
 
 import (
+	"bytes"
 	"context"
 	"regexp"
 	"strings"
@@ -63,6 +64,8 @@ func markdown(ctx context.Context, source []byte) ([]model.Block, error) {
 		return nil, err
 	}
 	blocks := []model.Block{}
+	// Sections start in document order, so lines are counted once overall.
+	first, counted := 1, 0
 	for i, start := range starts {
 		if start.skip {
 			continue
@@ -71,7 +74,8 @@ func markdown(ctx context.Context, source []byte) ([]model.Block, error) {
 		if i+1 < len(starts) {
 			end = starts[i+1].offset
 		}
-		first := 1 + strings.Count(string(source[:start.offset]), "\n")
+		first += bytes.Count(source[counted:start.offset], []byte("\n"))
+		counted = start.offset
 		lines := strings.Split(string(source[start.offset:end]), "\n")
 		// One block per section, trimmed of blank lines at its ends.
 		s, last := -1, -1
