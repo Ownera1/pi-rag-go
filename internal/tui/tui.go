@@ -105,6 +105,11 @@ type (
 		err error
 	}
 	errMsg struct{ err error }
+	// modelsMsg carries the models listed at url.
+	modelsMsg struct {
+		url string
+		listing
+	}
 )
 
 type Model struct {
@@ -120,6 +125,7 @@ type Model struct {
 	editing      bool
 	input        textinput.Model
 	pick         int // the highlighted entry of matches while typing
+	fetched      map[string]listing
 	status       *rag.Status
 	task         string
 	cancel       context.CancelFunc
@@ -174,7 +180,8 @@ func New(ctx context.Context, core *rag.Core, open func(string) (*rag.Core, erro
 	if !lipgloss.HasDarkBackground() {
 		fill = accentColor.Light
 	}
-	m := &Model{ctx: ctx, open: open, fields: fields(), page: pageList,
+	fetched := map[string]listing{}
+	m := &Model{ctx: ctx, open: open, fields: fields(fetched), fetched: fetched, page: pageList,
 		input: textinput.New(), bar: progress.New(progress.WithSolidFill(fill), progress.WithFillCharacters('=', '-'), progress.WithWidth(30))}
 	if core != nil {
 		if err := m.setCore(core); err != nil {
@@ -201,6 +208,7 @@ func (m *Model) setCore(core *rag.Core) error {
 		m.core.Close()
 	}
 	m.core, m.saved, m.draft = core, cfg, clone(cfg)
+	clear(m.fetched) // another workspace may hold other credentials
 	m.cursor, m.status, m.editing = 0, nil, false
 	return nil
 }
@@ -220,7 +228,32 @@ func clone(c model.Config) model.Config {
 	return c
 }
 
-func (m *Model) Init() tea.Cmd { return tea.Batch(m.refresh(), m.loadRows()) }
+func (m *Model) Init() tea.Cmd { return tea.Batch(m.refresh(), m.loadRows(), m.fetchModels()) }
+
+// fetchModels lists the models of each provider's endpoint once, so a model
+// field offers what the endpoint serves beyond its preset.
+func (m *Model) fetchModels() tea.Cmd {
+	if m.core == nil {
+		return nil
+	}
+	var cmds []tea.Cmd
+	for _, x := range []struct {
+		ps []preset
+		p  model.ProviderConfig
+	}{{rerankPresets, m.draft.Reranker}, {embedPresets, m.draft.Embedding}} {
+		url := listURL(x.ps, x.p)
+		if _, asked := m.fetched[url]; url == "" || asked {
+			continue
+		}
+		m.fetched[url] = listing{}
+		ctx, root, p, timeout := m.ctx, m.core.WorkspaceDir(), x.p, m.draft.HTTPTimeoutMs
+		cmds = append(cmds, func() tea.Msg {
+			ids, err := listModels(ctx, root, p, url, timeout)
+			return modelsMsg{url, listing{ids, err, true}}
+		})
+	}
+	return tea.Batch(cmds...)
+}
 
 func (m *Model) refresh() tea.Cmd {
 	if m.core == nil {
@@ -366,8 +399,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.msg += muted.Render(" | 索引需要重建，按 R rebuild")
 		}
 		return m, m.refresh()
+	case modelsMsg:
+		if _, asked := m.fetched[msg.url]; asked {
+			m.fetched[msg.url] = msg.listing
+		}
 	case tea.KeyMsg:
-		return m.key(msg)
+		// An edit may point a provider at an endpoint not yet listed.
+		next, cmd := m.key(msg)
+		return next, tea.Batch(cmd, m.fetchModels())
 	}
 	return m, nil
 }
@@ -803,6 +842,18 @@ func (m *Model) matchLines(nameW, valueW int) []string {
 		}
 		// Matches carry no tag, so they may use its column.
 		lines = append(lines, strings.Repeat(" ", 3+nameW)+fit(lead+s, valueW+tagW-1))
+	}
+	if f := m.fields[m.cursor]; matches != nil && f.source != nil {
+		note := ""
+		switch l, asked := m.fetched[f.source(m.draft)]; {
+		case asked && !l.done:
+			note = "  正在拉取模型列表..."
+		case l.err != nil:
+			note = "  模型列表拉取失败：" + l.err.Error()
+		}
+		if note != "" {
+			lines = append(lines, strings.Repeat(" ", 3+nameW)+muted.Render(fit(note, valueW+tagW-1)))
+		}
 	}
 	return lines
 }

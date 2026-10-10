@@ -165,3 +165,22 @@ func TestRetryHonorsRetryAfter(t *testing.T) {
 		}
 	}
 }
+
+func TestModelsListsIDsWithCredential(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer key" {
+			t.Errorf("%s %s %q", r.Method, r.URL.Path, r.Header.Get("Authorization"))
+		}
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"qwen3.7-text-rerank","object":"model"},{"id":""},{"id":"qwen3.7-text-embedding"}]}`))
+	}))
+	defer server.Close()
+	p, err := NewHTTP(model.ProviderConfig{Type: "dashscope", Model: "m", BaseURL: server.URL + "/v1/", APIKeyEnv: "DASHSCOPE_API_KEY"}, 1000, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetCredential("key")
+	ids, err := p.Models(context.Background())
+	if err != nil || !reflect.DeepEqual(ids, []string{"qwen3.7-text-rerank", "qwen3.7-text-embedding"}) {
+		t.Fatalf("%v %v", ids, err)
+	}
+}

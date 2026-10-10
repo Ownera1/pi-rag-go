@@ -57,24 +57,31 @@ func (p *HTTP) Model() string { return p.cfg.Model }
 
 func (p *HTTP) Dimensions() int { return p.cfg.Dimensions }
 
-func (p *HTTP) post(ctx context.Context, path string, body any, out any) error {
+// call sends body as JSON, or nothing when body is nil, and decodes the
+// response into out.
+func (p *HTTP) call(ctx context.Context, method, path string, body any, out any) error {
 	if p.refusal != nil {
 		return p.refusal
 	}
-	data, err := json.Marshal(body)
-	if err != nil {
-		return err
+	var data []byte
+	var err error
+	if body != nil {
+		if data, err = json.Marshal(body); err != nil {
+			return err
+		}
 	}
 	url := strings.TrimRight(p.cfg.BaseURL, "/") + path
 	for attempt := 0; attempt <= p.retries; attempt++ {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		req, e := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+		req, e := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(data))
 		if e != nil {
 			return e
 		}
-		req.Header.Set("Content-Type", "application/json")
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
 		if p.cfg.APIKeyEnv != "" {
 			if p.credential == "" {
 				return fmt.Errorf("%s is unset; environment and user-wide keys go only to the endpoint rag install recorded", p.cfg.APIKeyEnv)
@@ -193,7 +200,7 @@ func (p *HTTP) embed(ctx context.Context, texts []string, role string) ([][]floa
 				Embedding []float32 `json:"embedding"`
 			} `json:"data"`
 		}
-		if err := p.post(ctx, "/embeddings", body, &result); err != nil {
+		if err := p.call(ctx, http.MethodPost, "/embeddings", body, &result); err != nil {
 			return nil, err
 		}
 		if len(result.Data) != len(batch) {
@@ -248,7 +255,7 @@ func (p *HTTP) Rerank(ctx context.Context, query string, docs []model.RerankDoc,
 		// and results are the generic HTTP ones.
 		path = "/reranks"
 	}
-	if err := p.post(ctx, path, body, &out); err != nil {
+	if err := p.call(ctx, http.MethodPost, path, body, &out); err != nil {
 		return nil, err
 	}
 	type pair struct {
@@ -282,4 +289,24 @@ func (p *HTTP) Rerank(ctx context.Context, query string, docs []model.RerankDoc,
 		return result[:topK], nil
 	}
 	return result, nil
+}
+
+// Models lists the model ids the endpoint serves at GET {baseUrl}/models, in
+// the OpenAI list format.
+func (p *HTTP) Models(ctx context.Context) ([]string, error) {
+	var out struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := p.call(ctx, http.MethodGet, "/models", nil, &out); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(out.Data))
+	for _, m := range out.Data {
+		if m.ID != "" {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids, nil
 }
