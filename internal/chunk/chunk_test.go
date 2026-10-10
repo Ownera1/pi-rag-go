@@ -113,6 +113,33 @@ func TestMergeJoinsParagraphsWithinSectionAndPage(t *testing.T) {
 	}
 }
 
+func TestMergeMovesFiguresAfterTheParagraphTheyInterrupt(t *testing.T) {
+	s := "A"
+	one, two := 1, 2
+	block := func(text, kind string, page *int) model.Block {
+		return model.Block{Text: text, Section: &s, PageStart: page, PageEnd: page, Kind: kind}
+	}
+	got := Merge([]model.Block{
+		block("the BS shares pilots with", "", &one),
+		block("(a)", "figure", &one),
+		block("Fig. 2. Framework.", "figure", &one),
+		block("its neighbours.", "", &one),
+		block("TABLE I\nx | 1", "table", &one),
+		block("More text.", "", &one),
+		block("Next page.", "", &two),
+		block("Fig. 3. Results.", "figure", &two),
+	})
+	want := []string{"the BS shares pilots with\n\nits neighbours.\n\nMore text.", "(a)\n\nFig. 2. Framework.", "TABLE I\nx | 1", "Next page.", "Fig. 3. Results."}
+	if len(got) != len(want) {
+		t.Fatalf("%+v", got)
+	}
+	for i, b := range got {
+		if b.Text != want[i] {
+			t.Fatalf("%d: %q", i, b.Text)
+		}
+	}
+}
+
 func TestMergeKeepsLineNumbersExact(t *testing.T) {
 	l1, l1e, l3, l4, l7 := 1, 1, 3, 4, 7
 	blocks := []model.Block{

@@ -253,8 +253,10 @@ func ParseMinerU(ctx context.Context, b []byte) ([]model.Block, error) {
 				}
 			}
 		case "image", "chart", "table":
-			// Pixels are not indexed; captions and table text are. A table
-			// keeps its own block so its header and rows share a chunk.
+			// Pixels are not indexed; captions and table text are. Each keeps
+			// its own block, so a table's header and rows share a chunk and a
+			// caption gets a chunk of its own (chunk.Merge).
+			kind = "figure"
 			if typ == "table" {
 				kind = "table"
 			}

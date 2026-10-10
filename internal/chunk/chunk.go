@@ -41,7 +41,7 @@ func isCJK(r rune) bool {
 }
 
 // Version identifies chunk boundary behavior for the processing fingerprint.
-const Version = "merged-blocks-v3"
+const Version = "merged-blocks-v4"
 
 func sameInt(a, b *int) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
 
@@ -49,32 +49,56 @@ func sameString(a, b *string) bool {
 	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }
 
-// Merge joins consecutive blocks that share a section and page range, so
-// paragraph-level exports (MinerU, DOCX, HTML, JATS) chunk to target size
-// instead of one chunk per paragraph. Chunks never gain a wider page range.
-// Line-numbered blocks join only across exactly one blank line, which keeps
-// line arithmetic on the joined text exact.
-func Merge(blocks []model.Block) []model.Block {
-	out := []model.Block{}
+// Reading moves each figure or table that an export places inside a
+// paragraph, in reading order, after the text that continues past it, so the
+// paragraph's halves are adjacent and its caption no longer sits mid-sentence.
+// Text continues when Merge would join it to the text before the figure.
+func Reading(blocks []model.Block) []model.Block {
+	out, held := []model.Block{}, []model.Block{}
+	last := -1 // the latest text block in out
 	for _, b := range blocks {
 		if strings.TrimSpace(b.Text) == "" {
 			continue
 		}
-		if n := len(out); n > 0 {
-			last := &out[n-1]
-			lines := last.LineStart == nil && b.LineStart == nil
-			if last.LineStart != nil && last.LineEnd != nil && b.LineStart != nil && b.LineEnd != nil {
-				lines = *b.LineStart == *last.LineEnd+2 && strings.Count(last.Text, "\n") == *last.LineEnd-*last.LineStart
-			}
-			if lines && last.Kind == b.Kind && sameString(last.Section, b.Section) && sameInt(last.PageStart, b.PageStart) && sameInt(last.PageEnd, b.PageEnd) {
-				last.Text += "\n\n" + b.Text
-				last.LineEnd = b.LineEnd
-				continue
-			}
+		if b.Kind == "figure" || b.Kind == "table" {
+			held = append(held, b)
+			continue
+		}
+		if last < 0 || !joinable(out[last], b) {
+			out = append(out, held...)
+			held = held[:0]
+		}
+		out = append(out, b)
+		last = len(out) - 1
+	}
+	return append(out, held...)
+}
+
+// Merge joins consecutive blocks, in Reading order, that share a section and
+// page range, so paragraph-level exports (MinerU, DOCX, HTML, JATS) chunk to
+// target size instead of one chunk per paragraph. Chunks never gain a wider
+// page range. Line-numbered blocks join only across exactly one blank line,
+// which keeps line arithmetic on the joined text exact. Figures and tables,
+// a kind of their own, join only each other, so a caption gets its own chunk.
+func Merge(blocks []model.Block) []model.Block {
+	out := []model.Block{}
+	for _, b := range Reading(blocks) {
+		if n := len(out); n > 0 && joinable(out[n-1], b) {
+			out[n-1].Text += "\n\n" + b.Text
+			out[n-1].LineEnd = b.LineEnd
+			continue
 		}
 		out = append(out, b)
 	}
 	return out
+}
+
+func joinable(last, b model.Block) bool {
+	lines := last.LineStart == nil && b.LineStart == nil
+	if last.LineStart != nil && last.LineEnd != nil && b.LineStart != nil && b.LineEnd != nil {
+		lines = *b.LineStart == *last.LineEnd+2 && strings.Count(last.Text, "\n") == *last.LineEnd-*last.LineStart
+	}
+	return lines && last.Kind == b.Kind && sameString(last.Section, b.Section) && sameInt(last.PageStart, b.PageStart) && sameInt(last.PageEnd, b.PageEnd)
 }
 
 func newChunk(text string, b model.Block, index, start, end int) model.Chunk {
